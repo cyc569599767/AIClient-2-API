@@ -5,6 +5,7 @@ import {
     extractModelIdsFromNativeList,
     getConfiguredSupportedModels,
     getProviderModels,
+    normalizeModelMapping,
     normalizeModelIds,
     usesManagedModelList
 } from '../providers/provider-models.js';
@@ -15,6 +16,21 @@ import { getRegisteredProviders, getServiceAdapter, serviceInstances } from '../
 // 文件级互斥锁：防止并发读写导致数据丢失
 // 安全净化：移除用户输入字段中的危险内容（script、事件处理器、javascript:协议等），
 // 存储原始文本。HTML 转义统一由前端 escHtml() 负责，避免双编码问题。
+// 安全净化：移除用户输入字段中的危险内容，并可选地过滤敏感 API 密钥
+function sanitizeFreeTextInput(rawText = '', { stripQuotes = false } = {}) {
+    let text = String(rawText || '');
+    if (/(?:data|javascript|vbscript)\s*:/i.test(text)) {
+        return '';
+    }
+    text = text.replace(/<[^>]*>/g, '');
+    text = text.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '');
+    text = text.replace(/&[#\w]+;/g, '');
+    if (stripQuotes) {
+        text = text.replace(/["']/g, '');
+    }
+    return text.trim();
+}
+
 // 安全净化：移除用户输入字段中的危险内容，并可选地过滤敏感 API 密钥
 function sanitizeProviderData(provider, maskSensitive = false) {
     if (!provider || typeof provider !== 'object') return provider;
@@ -45,17 +61,12 @@ function sanitizeProviderData(provider, maskSensitive = false) {
         }
     }
 
-    // 2. 净化 customName 中的 HTML/脚本
+    // 2. 净化用户可编辑文本字段，避免注入和属性断裂
     if (typeof sanitized.customName === 'string') {
-        let name = sanitized.customName;
-        if (/(?:data|javascript|vbscript)\s*:/i.test(name)) {
-            sanitized.customName = '';
-            return sanitized;
-        }
-        name = name.replace(/<[^>]*>/g, '');
-        name = name.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '');
-        name = name.replace(/&[#\w]+;/g, '');
-        sanitized.customName = name.trim();
+        sanitized.customName = sanitizeFreeTextInput(sanitized.customName);
+    }
+    if (typeof sanitized.remark === 'string') {
+        sanitized.remark = sanitizeFreeTextInput(sanitized.remark, { stripQuotes: true });
     }
     return sanitized;
 }
@@ -80,6 +91,9 @@ function filterMaskedData(data) {
     
     for (const key in result) {
         const val = result[key];
+        if (key === 'customName' || key === 'checkModelName' || key === 'remark') {
+            continue;
+        }
         if (typeof val === 'string') {
             // 匹配 ******** 或 XXXX****XXXX 格式
             // 如果值包含 **** 且长度符合脱敏特征，则认为它是脱敏后的回传值，应该忽略
@@ -157,7 +171,7 @@ async function runProviderHealthCheck(providerPoolManager, providerType, provide
         });
 
         if (healthResult.success) {
-            providerPoolManager.markProviderHealthy(providerType, providerConfig, false, healthResult.modelName);
+            providerPoolManager.markProviderHealthy(providerType, providerConfig, false, healthResult.modelName, false);
             return {
                 uuid: providerConfig.uuid,
                 success: true,
@@ -523,6 +537,7 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager) 
         const filteredConfig = filterMaskedData(providerConfig);
         if (usesManagedModelList(providerType)) {
             filteredConfig.supportedModels = normalizeModelIds(filteredConfig.supportedModels);
+            filteredConfig.modelMapping = normalizeModelMapping(filteredConfig.modelMapping);
             filteredConfig.notSupportedModels = [];
         }
         providerPools[providerType].push(filteredConfig);
@@ -622,6 +637,7 @@ async function _handleUpdateProvider(req, res, currentConfig, providerPoolManage
         const filteredConfig = filterMaskedData(providerConfig);
         if (usesManagedModelList(providerType)) {
             filteredConfig.supportedModels = normalizeModelIds(filteredConfig.supportedModels);
+            filteredConfig.modelMapping = normalizeModelMapping(filteredConfig.modelMapping);
             filteredConfig.notSupportedModels = [];
         }
         
@@ -1112,6 +1128,7 @@ export async function handleHealthCheck(req, res, currentConfig, providerPoolMan
                 message: 'No unhealthy providers to check',
                 successCount: 0,
                 failCount: 0,
+                skippedCount: 0,
                 totalCount: providers.length,
                 results: []
             }));
@@ -1128,65 +1145,30 @@ export async function handleHealthCheck(req, res, currentConfig, providerPoolMan
             // 跳过已禁用的节点
             if (providerConfig.isDisabled) {
                 logger.info(`[UI API] Skipping health check for disabled provider: ${providerConfig.uuid}`);
+                results.push({
+                    uuid: providerConfig.uuid,
+                    success: null,
+                    healthy: providerConfig.isHealthy,
+                    reason: 'disabled',
+                    message: 'Skipped: provider disabled'
+                });
                 continue;
             }
 
-             try {
-                const healthResult = await providerPoolManager._checkProviderHealth(providerType, providerConfig);
-                
-                if (healthResult.success) {
-                    providerPoolManager.markProviderHealthy(providerType, providerConfig, false, healthResult.modelName);
-                    results.push({
-                        uuid: providerConfig.uuid,
-                        success: true,
-                        modelName: healthResult.modelName,
-                        message: 'Healthy'
-                    });
-                } else {
-                    // 检查是否为认证错误（401/403），如果是则立即标记为不健康
-                    const errorMessage = healthResult.errorMessage || 'Check failed';
-                    const isAuthError = /\b(401|403)\b/.test(errorMessage) ||
-                                       /\b(Unauthorized|Forbidden|AccessDenied|InvalidToken|ExpiredToken)\b/i.test(errorMessage);
-                    
-                    if (isAuthError) {
-                        providerPoolManager.markProviderUnhealthyImmediately(providerType, providerConfig, errorMessage);
-                        logger.info(`[UI API] Auth error detected for ${providerConfig.uuid}, immediately marked as unhealthy`);
-                    } else {
-                        providerPoolManager.markProviderUnhealthy(providerType, providerConfig, errorMessage);
-                    }
-                    
-                    providerStatus.config.lastHealthCheckTime = new Date().toISOString();
-                    if (healthResult.modelName) {
-                        providerStatus.config.lastHealthCheckModel = healthResult.modelName;
-                    }
-                    results.push({
-                        uuid: providerConfig.uuid,
-                        success: false,
-                        modelName: healthResult.modelName,
-                        message: errorMessage,
-                        isAuthError: isAuthError
-                    });
-                }
-            } catch (error) {
-                const errorMessage = error.message || 'Unknown error';
-                // 检查是否为认证错误（401/403），如果是则立即标记为不健康
-                const isAuthError = /\b(401|403)\b/.test(errorMessage) ||
-                                   /\b(Unauthorized|Forbidden|AccessDenied|InvalidToken|ExpiredToken)\b/i.test(errorMessage);
-                
-                if (isAuthError) {
-                    providerPoolManager.markProviderUnhealthyImmediately(providerType, providerConfig, errorMessage);
-                    logger.info(`[UI API] Auth error detected for ${providerConfig.uuid}, immediately marked as unhealthy`);
-                } else {
-                    providerPoolManager.markProviderUnhealthy(providerType, providerConfig, errorMessage);
-                }
-                
+            // 兼容旧配置：checkHealth=false 时，在批量检测中返回 skipped
+            if (providerConfig.checkHealth === false) {
                 results.push({
                     uuid: providerConfig.uuid,
-                    success: false,
-                    message: errorMessage,
-                    isAuthError: isAuthError
+                    success: null,
+                    healthy: providerConfig.isHealthy,
+                    reason: 'checkHealthDisabled',
+                    message: 'Skipped: checkHealth disabled'
                 });
+                continue;
             }
+
+            const result = await runProviderHealthCheck(providerPoolManager, providerType, providerStatus);
+            results.push(result);
         }
 
         // 保存更新后的状态到文件
@@ -1201,8 +1183,9 @@ export async function handleHealthCheck(req, res, currentConfig, providerPoolMan
 
         const successCount = results.filter(r => r.success === true).length;
         const failCount = results.filter(r => r.success === false).length;
+        const skippedCount = results.filter(r => r.success === null).length;
 
-        logger.info(`[UI API] Health check completed for ${providerType}: ${successCount} recovered, ${failCount} still unhealthy (checked ${unhealthyProviders.length} unhealthy nodes)`);
+        logger.info(`[UI API] Health check completed for ${providerType}: ${successCount} recovered, ${failCount} still unhealthy, ${skippedCount} skipped (checked ${unhealthyProviders.length} unhealthy nodes)`);
 
         // 广播更新事件
         broadcastEvent('config_update', {
@@ -1216,9 +1199,10 @@ export async function handleHealthCheck(req, res, currentConfig, providerPoolMan
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             success: true,
-            message: `Health check completed: ${successCount} healthy, ${failCount} unhealthy`,
+            message: `Health check completed: ${successCount} healthy, ${failCount} unhealthy, ${skippedCount} skipped`,
             successCount,
             failCount,
+            skippedCount,
             totalCount: providers.length,
             results
         }));

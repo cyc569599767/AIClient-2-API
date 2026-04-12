@@ -72,6 +72,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         CRON_NEAR_MINUTES: 15,
         CRON_REFRESH_TOKEN: false,
         LOGIN_EXPIRY: 3600, // 登录过期时间（秒），默认1小时
+        GITHUB_REPO_URL: 'https://github.com/justlovemaki/AIClient-2-API',
         LOGIN_MAX_ATTEMPTS: 5, // 最大失败重试次数
         LOGIN_LOCKOUT_DURATION: 1800, // 锁定持续时间（秒），默认30分钟
         LOGIN_MIN_INTERVAL: 5000, // 两次尝试之间的最小间隔（毫秒），默认1秒

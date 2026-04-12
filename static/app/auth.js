@@ -7,6 +7,7 @@ class AuthManager {
     constructor() {
         this.tokenKey = 'authToken';
         this.expiryKey = 'authTokenExpiry';
+        this.activeSectionKey = 'activeSection';
         this.baseURL = window.location.origin;
     }
 
@@ -61,6 +62,7 @@ class AuthManager {
     clearToken() {
         localStorage.removeItem(this.tokenKey);
         localStorage.removeItem(this.expiryKey);
+        localStorage.removeItem(this.activeSectionKey);
     }
 
     /**

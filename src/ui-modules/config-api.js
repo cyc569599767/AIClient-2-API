@@ -10,6 +10,23 @@ import { getRequestBody } from '../utils/common.js';
 import { broadcastEvent } from '../ui-modules/event-broadcast.js';
 import { HEALTH_CHECK, PASSWORD, NETWORK, RETRY } from '../utils/constants.js';
 
+function normalizeHttpUrl(rawUrl, fallback = null) {
+    const value = String(rawUrl ?? '').trim();
+    if (!value) {
+        return fallback;
+    }
+
+    try {
+        const parsed = new URL(value);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            return null;
+        }
+        return parsed.toString();
+    } catch (error) {
+        return null;
+    }
+}
+
 /**
  * 重载配置文件
  * 动态导入config-manager并重新初始化配置
@@ -76,6 +93,7 @@ export async function handleGetConfig(req, res, currentConfig) {
         CRON_REFRESH_TOKEN: currentConfig.CRON_REFRESH_TOKEN,
         LOGIN_EXPIRY: currentConfig.LOGIN_EXPIRY,
         PROVIDER_POOLS_FILE_PATH: currentConfig.PROVIDER_POOLS_FILE_PATH,
+        GITHUB_REPO_URL: currentConfig.GITHUB_REPO_URL,
         MAX_ERROR_COUNT: currentConfig.MAX_ERROR_COUNT,
         SYSTEM_PROMPT_REPLACEMENTS: currentConfig.SYSTEM_PROMPT_REPLACEMENTS,
         WARMUP_TARGET: currentConfig.WARMUP_TARGET,
@@ -171,6 +189,17 @@ export async function handleUpdateConfig(req, res, currentConfig) {
         if (newConfig.CRON_REFRESH_TOKEN !== undefined) currentConfig.CRON_REFRESH_TOKEN = newConfig.CRON_REFRESH_TOKEN;
         if (newConfig.LOGIN_EXPIRY !== undefined) currentConfig.LOGIN_EXPIRY = newConfig.LOGIN_EXPIRY;
         if (newConfig.PROVIDER_POOLS_FILE_PATH !== undefined) currentConfig.PROVIDER_POOLS_FILE_PATH = newConfig.PROVIDER_POOLS_FILE_PATH;
+        if (newConfig.GITHUB_REPO_URL !== undefined) {
+            const normalizedGithubRepoUrl = normalizeHttpUrl(
+                newConfig.GITHUB_REPO_URL,
+                'https://github.com/justlovemaki/AIClient-2-API'
+            );
+            if (normalizedGithubRepoUrl) {
+                currentConfig.GITHUB_REPO_URL = normalizedGithubRepoUrl;
+            } else {
+                logger.warn(`[UI API] Rejected invalid GITHUB_REPO_URL: ${newConfig.GITHUB_REPO_URL}`);
+            }
+        }
         if (newConfig.MAX_ERROR_COUNT !== undefined) currentConfig.MAX_ERROR_COUNT = newConfig.MAX_ERROR_COUNT;
         if (newConfig.WARMUP_TARGET !== undefined) currentConfig.WARMUP_TARGET = newConfig.WARMUP_TARGET;
         if (newConfig.REFRESH_CONCURRENCY_PER_PROVIDER !== undefined) currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER = newConfig.REFRESH_CONCURRENCY_PER_PROVIDER;
@@ -304,6 +333,7 @@ export async function handleUpdateConfig(req, res, currentConfig) {
                 CRON_REFRESH_TOKEN: currentConfig.CRON_REFRESH_TOKEN,
                 LOGIN_EXPIRY: currentConfig.LOGIN_EXPIRY,
                 PROVIDER_POOLS_FILE_PATH: currentConfig.PROVIDER_POOLS_FILE_PATH,
+                GITHUB_REPO_URL: currentConfig.GITHUB_REPO_URL,
                 MAX_ERROR_COUNT: currentConfig.MAX_ERROR_COUNT,
                 WARMUP_TARGET: currentConfig.WARMUP_TARGET,
                 REFRESH_CONCURRENCY_PER_PROVIDER: currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER,

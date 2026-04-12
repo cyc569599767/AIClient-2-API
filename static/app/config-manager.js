@@ -7,6 +7,30 @@ import { t } from './i18n.js';
 
 // 提供商配置缓存
 let currentProviderConfigs = null;
+const DEFAULT_GITHUB_REPO_URL = 'https://github.com/justlovemaki/AIClient-2-API';
+
+function resolveGithubRepoUrl(rawUrl) {
+    const value = String(rawUrl || '').trim();
+    if (!value) {
+        return DEFAULT_GITHUB_REPO_URL;
+    }
+
+    try {
+        const parsed = new URL(value);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+            return null;
+        }
+        return parsed.toString();
+    } catch (error) {
+        return null;
+    }
+}
+
+function applyGithubRepoUrl(url) {
+    const githubRepoLinkEl = document.getElementById('githubRepoLink');
+    if (!githubRepoLinkEl) return;
+    githubRepoLinkEl.href = url || DEFAULT_GITHUB_REPO_URL;
+}
 
 /**
  * 更新提供商配置并重新渲染配置页面的提供商选择标签
@@ -246,6 +270,7 @@ async function loadConfiguration() {
         const cronRefreshTokenEl = document.getElementById('cronRefreshToken');
         const loginExpiryEl = document.getElementById('loginExpiry');
         const providerPoolsFilePathEl = document.getElementById('providerPoolsFilePath');
+        const githubRepoUrlEl = document.getElementById('githubRepoUrl');
 
         const maxErrorCountEl = document.getElementById('maxErrorCount');
         const warmupTargetEl = document.getElementById('warmupTarget');
@@ -268,6 +293,9 @@ async function loadConfiguration() {
         if (cronRefreshTokenEl) cronRefreshTokenEl.checked = data.CRON_REFRESH_TOKEN || false;
         if (loginExpiryEl) loginExpiryEl.value = data.LOGIN_EXPIRY || 3600;
         if (providerPoolsFilePathEl) providerPoolsFilePathEl.value = data.PROVIDER_POOLS_FILE_PATH || '';
+        const githubRepoUrl = resolveGithubRepoUrl(data.GITHUB_REPO_URL);
+        if (githubRepoUrlEl) githubRepoUrlEl.value = githubRepoUrl || DEFAULT_GITHUB_REPO_URL;
+        applyGithubRepoUrl(githubRepoUrl || DEFAULT_GITHUB_REPO_URL);
         if (maxErrorCountEl) maxErrorCountEl.value = data.MAX_ERROR_COUNT || 10;
         if (warmupTargetEl) warmupTargetEl.value = data.WARMUP_TARGET || 0;
         if (refreshConcurrencyPerProviderEl) refreshConcurrencyPerProviderEl.value = data.REFRESH_CONCURRENCY_PER_PROVIDER || 1;
@@ -455,6 +483,12 @@ async function saveConfiguration() {
     config.CRON_REFRESH_TOKEN = document.getElementById('cronRefreshToken')?.checked || false;
     config.LOGIN_EXPIRY = parseInt(document.getElementById('loginExpiry')?.value || 3600);
     config.PROVIDER_POOLS_FILE_PATH = document.getElementById('providerPoolsFilePath')?.value || '';
+    const githubRepoUrl = resolveGithubRepoUrl(document.getElementById('githubRepoUrl')?.value || '');
+    if (!githubRepoUrl) {
+        showToast(t('common.error'), t('config.advanced.githubRepoUrlInvalid'), 'error');
+        return;
+    }
+    config.GITHUB_REPO_URL = githubRepoUrl;
     config.MAX_ERROR_COUNT = parseInt(document.getElementById('maxErrorCount')?.value || 10);
     config.WARMUP_TARGET = parseInt(document.getElementById('warmupTarget')?.value || 0);
     config.REFRESH_CONCURRENCY_PER_PROVIDER = parseInt(document.getElementById('refreshConcurrencyPerProvider')?.value || 1);
@@ -565,6 +599,8 @@ async function saveConfiguration() {
             await loadProviders();
             showToast(t('common.success'), t('common.providerPoolRefreshed'), 'success');
         }
+
+        applyGithubRepoUrl(config.GITHUB_REPO_URL);
     } catch (error) {
         console.error('Failed to save configuration:', error);
         showToast(t('common.error'), t('common.error') + ': ' + error.message, 'error');

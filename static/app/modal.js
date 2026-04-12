@@ -44,6 +44,160 @@ function parseModelsData(rawValue = '') {
     }
 }
 
+function normalizeModelMapping(modelMapping = {}) {
+    if (!modelMapping || typeof modelMapping !== 'object' || Array.isArray(modelMapping)) {
+        return {};
+    }
+
+    const normalized = {};
+    Object.entries(modelMapping).forEach(([requestedModel, targetModel]) => {
+        if (typeof requestedModel !== 'string' || typeof targetModel !== 'string') {
+            return;
+        }
+
+        const normalizedRequestedModel = requestedModel.trim();
+        const normalizedTargetModel = targetModel.trim();
+        if (!normalizedRequestedModel || !normalizedTargetModel) {
+            return;
+        }
+
+        normalized[normalizedRequestedModel] = normalizedTargetModel;
+    });
+
+    return normalized;
+}
+
+function serializeModelMappingData(modelMapping = {}) {
+    return encodeURIComponent(JSON.stringify(normalizeModelMapping(modelMapping)));
+}
+
+function parseModelMappingData(rawValue = '') {
+    if (!rawValue) {
+        return {};
+    }
+
+    try {
+        return normalizeModelMapping(JSON.parse(decodeURIComponent(rawValue)));
+    } catch (error) {
+        console.warn('Failed to parse model mapping data:', error);
+        return {};
+    }
+}
+
+function parseManualModelsText(rawText = '') {
+    return normalizeModelList(
+        String(rawText || '')
+            .split(/[\n,]+/)
+            .map(item => item.trim())
+            .filter(Boolean)
+    );
+}
+
+function parseManualModelMappingText(rawText = '') {
+    const text = String(rawText || '').trim();
+    if (!text) {
+        return {};
+    }
+
+    if (text.startsWith('{')) {
+        try {
+            return normalizeModelMapping(JSON.parse(text));
+        } catch (error) {
+            throw new Error(t('modal.provider.modelMappingInvalidJson'));
+        }
+    }
+
+    const mapping = {};
+    const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+    lines.forEach((line, index) => {
+        if (line.startsWith('#')) {
+            return;
+        }
+
+        let separator = '';
+        let separatorIndex = -1;
+        const preferredSeparators = ['=>', '->', '='];
+
+        for (const currentSeparator of preferredSeparators) {
+            const idx = line.indexOf(currentSeparator);
+            if (idx > -1) {
+                separator = currentSeparator;
+                separatorIndex = idx;
+                break;
+            }
+        }
+
+        if (separatorIndex === -1) {
+            const colonIndex = line.indexOf(':');
+            const chineseColonIndex = line.indexOf('：');
+            const fallbackIndex = colonIndex > -1 ? colonIndex : chineseColonIndex;
+            if (fallbackIndex > -1) {
+                separator = line[fallbackIndex];
+                separatorIndex = fallbackIndex;
+            }
+        }
+
+        if (separatorIndex === -1) {
+            throw new Error(t('modal.provider.modelMappingInvalidLine', { line: index + 1 }));
+        }
+
+        const requestedModel = line.slice(0, separatorIndex).trim();
+        const targetModel = line.slice(separatorIndex + separator.length).trim();
+        if (!requestedModel || !targetModel) {
+            throw new Error(t('modal.provider.modelMappingInvalidLine', { line: index + 1 }));
+        }
+
+        mapping[requestedModel] = targetModel;
+    });
+
+    return normalizeModelMapping(mapping);
+}
+
+function stringifyModelMappingLines(modelMapping = {}) {
+    const normalized = normalizeModelMapping(modelMapping);
+    return Object.entries(normalized)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([requestedModel, targetModel]) => `${requestedModel} => ${targetModel}`)
+        .join('\n');
+}
+
+function renderModelMappingPreview(modelMapping = {}) {
+    const mappingEntries = Object.entries(normalizeModelMapping(modelMapping));
+    if (mappingEntries.length === 0) {
+        return `
+            <div class="provider-model-picker-mapping-preview provider-model-picker-mapping-preview-empty">
+                ${escapeHtml(t('modal.provider.modelPickerMappingPreviewEmpty'))}
+            </div>
+        `;
+    }
+
+    const previewEntries = mappingEntries
+        .sort(([a], [b]) => a.localeCompare(b))
+        .slice(0, 8)
+        .map(([requestedModel, targetModel]) => `
+            <span class="provider-model-picker-mapping-preview-tag" title="${escapeHtml(`${requestedModel} => ${targetModel}`)}">
+                ${escapeHtml(`${requestedModel} → ${targetModel}`)}
+            </span>
+        `)
+        .join('');
+
+    const remaining = mappingEntries.length - Math.min(mappingEntries.length, 8);
+    const remainingHtml = remaining > 0
+        ? `<span class="provider-model-picker-mapping-preview-more">+${remaining}</span>`
+        : '';
+
+    return `
+        <div class="provider-model-picker-mapping-preview provider-model-picker-mapping-preview-valid">
+            <div class="provider-model-picker-mapping-preview-title">
+                ${escapeHtml(t('modal.provider.modelPickerMappingPreviewValid', { count: mappingEntries.length }))}
+            </div>
+            <div class="provider-model-picker-mapping-preview-list">
+                ${previewEntries}${remainingHtml}
+            </div>
+        </div>
+    `;
+}
+
 function renderSupportedModelsValue(models = []) {
     const selectedModels = normalizeModelList(models);
     if (selectedModels.length === 0) {
@@ -54,6 +208,25 @@ function renderSupportedModelsValue(models = []) {
         <div class="supported-models-list">
             ${selectedModels.map(model => `
                 <span class="supported-model-tag" title="${escapeHtml(model)}">${escapeHtml(model)}</span>
+            `).join('')}
+        </div>
+    `;
+}
+
+function renderSupportedModelMappingValue(modelMapping = {}) {
+    const mappingEntries = Object.entries(normalizeModelMapping(modelMapping));
+    if (mappingEntries.length === 0) {
+        return `<div class="supported-models-empty">${escapeHtml(t('modal.provider.modelMappingEmpty'))}</div>`;
+    }
+
+    return `
+        <div class="supported-model-mapping-list">
+            ${mappingEntries.map(([requestedModel, targetModel]) => `
+                <span class="supported-model-mapping-tag" title="${escapeHtml(`${requestedModel} => ${targetModel}`)}">
+                    <span class="requested-model">${escapeHtml(requestedModel)}</span>
+                    <i class="fas fa-arrow-right"></i>
+                    <span class="target-model">${escapeHtml(targetModel)}</span>
+                </span>
             `).join('')}
         </div>
     `;
@@ -86,15 +259,42 @@ function setSupportedModelsSelection(uuid, models, options = {}) {
     }
 }
 
+function setSupportedModelMapping(uuid, modelMapping, options = {}) {
+    const container = getSupportedModelsContainer(uuid);
+    if (!container) return;
+
+    const normalizedModelMapping = normalizeModelMapping(modelMapping);
+    const encodedModelMapping = serializeModelMappingData(normalizedModelMapping);
+    container.dataset.modelMapping = encodedModelMapping;
+
+    if (options.updateOriginal) {
+        container.dataset.originalModelMapping = encodedModelMapping;
+    }
+
+    const mappingValueContainer = container.querySelector('.supported-models-mapping-values');
+    if (mappingValueContainer) {
+        mappingValueContainer.innerHTML = renderSupportedModelMappingValue(normalizedModelMapping);
+    }
+
+    const mappingSummary = container.querySelector('.supported-models-mapping-summary');
+    if (mappingSummary) {
+        mappingSummary.textContent = t('modal.provider.modelMappingCount', { count: Object.keys(normalizedModelMapping).length });
+    }
+}
+
 function resetSupportedModelsSelection(uuid) {
     const container = getSupportedModelsContainer(uuid);
     if (!container) return;
     setSupportedModelsSelection(uuid, parseModelsData(container.dataset.originalModels || ''));
+    setSupportedModelMapping(uuid, parseModelMappingData(container.dataset.originalModelMapping || ''));
 }
 
 function renderSupportedModelsSection(provider) {
     const selectedModels = normalizeModelList(provider.supportedModels || []);
+    const modelMapping = normalizeModelMapping(provider.modelMapping);
     const encodedModels = serializeModelsData(selectedModels);
+    const encodedModelMapping = serializeModelMappingData(modelMapping);
+    const mappingCount = Object.keys(modelMapping).length;
 
     return `
         <div class="config-item supported-models-section">
@@ -105,7 +305,9 @@ function renderSupportedModelsSection(provider) {
             <div class="supported-models-container"
                  data-uuid="${provider.uuid}"
                  data-selected-models="${encodedModels}"
-                 data-original-models="${encodedModels}">
+                 data-original-models="${encodedModels}"
+                 data-model-mapping="${encodedModelMapping}"
+                 data-original-model-mapping="${encodedModelMapping}">
                 <div class="supported-models-toolbar">
                     <span class="supported-models-summary">${escapeHtml(t('modal.provider.modelPickerSelected', { count: selectedModels.length }))}</span>
                     <button type="button"
@@ -118,6 +320,15 @@ function renderSupportedModelsSection(provider) {
                 </div>
                 <div class="supported-models-values">
                     ${renderSupportedModelsValue(selectedModels)}
+                </div>
+                <div class="supported-models-mapping">
+                    <div class="supported-models-mapping-header">
+                        <span class="supported-models-mapping-title">${escapeHtml(t('modal.provider.modelMappingTitle'))}</span>
+                        <span class="supported-models-mapping-summary">${escapeHtml(t('modal.provider.modelMappingCount', { count: mappingCount }))}</span>
+                    </div>
+                    <div class="supported-models-mapping-values">
+                        ${renderSupportedModelMappingValue(modelMapping)}
+                    </div>
                 </div>
             </div>
         </div>
@@ -145,7 +356,9 @@ function collectDraftProviderConfig(providerDetail, providerType, uuid) {
 
     if (usesManagedModelList(providerType)) {
         const supportedModels = parseModelsData(getSupportedModelsContainer(uuid)?.dataset.selectedModels || '');
+        const modelMapping = parseModelMappingData(getSupportedModelsContainer(uuid)?.dataset.modelMapping || '');
         providerConfig.supportedModels = supportedModels;
+        providerConfig.modelMapping = modelMapping;
         providerConfig.notSupportedModels = [];
     } else {
         const modelCheckboxes = providerDetail.querySelectorAll(`.model-checkbox[data-uuid="${uuid}"]:checked`);
@@ -166,13 +379,20 @@ function closeSupportedModelsPicker(overlay) {
     overlay.remove();
 }
 
-function showSupportedModelsPickerModal(providerType, uuid, detectedModels, currentSelectedModels = []) {
+function showSupportedModelsPickerModal(providerType, uuid, detectedModels, currentSelectedModels = [], currentModelMapping = {}) {
     const existingOverlay = document.querySelector('.provider-model-picker-overlay');
     if (existingOverlay) {
         closeSupportedModelsPicker(existingOverlay);
     }
 
-    const allModels = normalizeModelList([...detectedModels, ...currentSelectedModels]);
+    const normalizedCurrentModelMapping = normalizeModelMapping(currentModelMapping);
+    const modelCatalog = new Set(
+        normalizeModelList([
+            ...detectedModels,
+            ...currentSelectedModels,
+            ...Object.values(normalizedCurrentModelMapping)
+        ])
+    );
     const selectedModels = new Set(normalizeModelList(currentSelectedModels));
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay provider-model-picker-overlay';
@@ -203,6 +423,23 @@ function showSupportedModelsPickerModal(providerType, uuid, detectedModels, curr
                 </div>
                 <div class="provider-model-picker-summary"></div>
                 <div class="provider-model-picker-list"></div>
+                <div class="provider-model-picker-manual">
+                    <div class="provider-model-picker-manual-group">
+                        <label>${escapeHtml(t('modal.provider.modelPickerManualModelsTitle'))}</label>
+                        <textarea class="provider-model-picker-manual-models"
+                                  rows="3"
+                                  placeholder="${escapeHtml(t('modal.provider.modelPickerManualModelsPlaceholder'))}"></textarea>
+                        <div class="provider-model-picker-manual-help">${escapeHtml(t('modal.provider.modelPickerManualModelsHelp'))}</div>
+                    </div>
+                    <div class="provider-model-picker-manual-group">
+                        <label>${escapeHtml(t('modal.provider.modelPickerManualMappingTitle'))}</label>
+                        <textarea class="provider-model-picker-manual-mapping"
+                                  rows="4"
+                                  placeholder="${escapeHtml(t('modal.provider.modelPickerManualMappingPlaceholder'))}"></textarea>
+                        <div class="provider-model-picker-manual-help">${escapeHtml(t('modal.provider.modelPickerManualMappingHelp'))}</div>
+                        <div class="provider-model-picker-mapping-preview-container"></div>
+                    </div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary provider-model-picker-cancel">
@@ -223,8 +460,55 @@ function showSupportedModelsPickerModal(providerType, uuid, detectedModels, curr
     const cancelButton = overlay.querySelector('.provider-model-picker-cancel');
     const confirmButton = overlay.querySelector('.provider-model-picker-confirm');
     const closeButton = overlay.querySelector('.modal-close');
+    const manualModelsInput = overlay.querySelector('.provider-model-picker-manual-models');
+    const manualMappingInput = overlay.querySelector('.provider-model-picker-manual-mapping');
+    const mappingPreviewContainer = overlay.querySelector('.provider-model-picker-mapping-preview-container');
+    let mappingParseState = {
+        isValid: true,
+        mapping: normalizeModelMapping(currentModelMapping),
+        error: ''
+    };
+
+    if (manualMappingInput) {
+        manualMappingInput.value = stringifyModelMappingLines(normalizedCurrentModelMapping);
+    }
+
+    const updateConfirmState = () => {
+        if (confirmButton) {
+            confirmButton.disabled = !mappingParseState.isValid;
+        }
+    };
+
+    const updateMappingPreview = () => {
+        try {
+            const parsedModelMapping = parseManualModelMappingText(manualMappingInput?.value || '');
+            mappingParseState = {
+                isValid: true,
+                mapping: parsedModelMapping,
+                error: ''
+            };
+            if (mappingPreviewContainer) {
+                mappingPreviewContainer.innerHTML = renderModelMappingPreview(parsedModelMapping);
+            }
+        } catch (error) {
+            mappingParseState = {
+                isValid: false,
+                mapping: {},
+                error: error.message
+            };
+            if (mappingPreviewContainer) {
+                mappingPreviewContainer.innerHTML = `
+                    <div class="provider-model-picker-mapping-preview provider-model-picker-mapping-preview-invalid">
+                        ${escapeHtml(t('modal.provider.modelPickerMappingPreviewInvalid'))}: ${escapeHtml(error.message)}
+                    </div>
+                `;
+            }
+        }
+        updateConfirmState();
+    };
 
     const getVisibleModels = () => {
+        const allModels = normalizeModelList(Array.from(modelCatalog));
         const keyword = searchInput.value.trim().toLowerCase();
         if (!keyword) {
             return allModels;
@@ -253,6 +537,7 @@ function showSupportedModelsPickerModal(providerType, uuid, detectedModels, curr
     };
 
     const renderList = () => {
+        const allModels = normalizeModelList(Array.from(modelCatalog));
         const visibleModels = getVisibleModels();
 
         if (visibleModels.length === 0) {
@@ -291,6 +576,22 @@ function showSupportedModelsPickerModal(providerType, uuid, detectedModels, curr
         updateSummary();
     };
 
+    const refreshModelCatalog = () => {
+        const manualModels = parseManualModelsText(manualModelsInput?.value || '');
+        const manualModelMapping = mappingParseState.isValid ? mappingParseState.mapping : {};
+
+        const mergedModels = normalizeModelList([
+            ...detectedModels,
+            ...Array.from(selectedModels),
+            ...manualModels,
+            ...Object.values(manualModelMapping)
+        ]);
+
+        modelCatalog.clear();
+        mergedModels.forEach(model => modelCatalog.add(model));
+        renderList();
+    };
+
     const handleClose = () => closeSupportedModelsPicker(overlay);
 
     overlay.escapeHandler = event => {
@@ -307,6 +608,11 @@ function showSupportedModelsPickerModal(providerType, uuid, detectedModels, curr
     });
 
     searchInput.addEventListener('input', renderList);
+    manualModelsInput?.addEventListener('input', refreshModelCatalog);
+    manualMappingInput?.addEventListener('input', () => {
+        updateMappingPreview();
+        refreshModelCatalog();
+    });
     selectAllInput.addEventListener('change', () => {
         const visibleModels = getVisibleModels();
         visibleModels.forEach(model => {
@@ -325,12 +631,27 @@ function showSupportedModelsPickerModal(providerType, uuid, detectedModels, curr
     cancelButton.addEventListener('click', handleClose);
     closeButton.addEventListener('click', handleClose);
     confirmButton.addEventListener('click', () => {
-        setSupportedModelsSelection(uuid, Array.from(selectedModels));
+        if (!mappingParseState.isValid) {
+            showToast(t('common.error'), mappingParseState.error || t('modal.provider.modelPickerMappingPreviewInvalid'), 'error');
+            return;
+        }
+        const parsedModelMapping = mappingParseState.mapping;
+
+        const manualModels = parseManualModelsText(manualModelsInput?.value || '');
+        const finalSelectedModels = normalizeModelList([
+            ...Array.from(selectedModels),
+            ...manualModels,
+            ...Object.values(parsedModelMapping)
+        ]);
+
+        setSupportedModelsSelection(uuid, finalSelectedModels);
+        setSupportedModelMapping(uuid, parsedModelMapping);
         handleClose();
     });
 
     document.body.appendChild(overlay);
-    renderList();
+    updateMappingPreview();
+    refreshModelCatalog();
     searchInput.focus();
 }
 
@@ -365,11 +686,19 @@ async function openSupportedModelsPicker(providerType, uuid, event) {
             providerType,
             uuid,
             response.models || [],
-            draftProviderConfig.supportedModels || response.selectedModels || []
+            draftProviderConfig.supportedModels || response.selectedModels || [],
+            draftProviderConfig.modelMapping || {}
         );
     } catch (error) {
         console.error('Failed to detect provider models:', error);
         showToast(t('common.error'), t('modal.provider.detectModelsFailed') + ': ' + error.message, 'error');
+        showSupportedModelsPickerModal(
+            providerType,
+            uuid,
+            [],
+            draftProviderConfig.supportedModels || [],
+            draftProviderConfig.modelMapping || {}
+        );
     } finally {
         if (detectButton) {
             detectButton.innerHTML = originalHtml;
@@ -433,7 +762,7 @@ function showProviderManagerModal(data) {
                             <i class="fas fa-heartbeat"></i> 重置为健康
                         </button>
                         <button class="btn btn-info" onclick="window.performHealthCheck('${providerType}')" data-i18n="modal.provider.healthCheck" title="对不健康节点执行健康检测">
-                            <i class="fas fa-stethoscope"></i> 检测不健康
+                            <i class="fas fa-stethoscope"></i> 健康检测
                         </button>
                         <button class="btn btn-secondary" onclick="window.refreshUnhealthyUuids('${providerType}')" data-i18n="modal.provider.refreshUnhealthyUuids" title="刷新不健康节点的UUID">
                             <i class="fas fa-sync-alt"></i> <span data-i18n="modal.provider.refreshUnhealthyUuidsBtn">刷新UUID</span>
@@ -731,7 +1060,7 @@ function renderProviderList(providers) {
         const isDisabled = provider.isDisabled || false;
         const lastUsed = provider.lastUsed ? new Date(provider.lastUsed).toLocaleString() : t('modal.provider.neverUsed');
         const lastHealthCheckTime = provider.lastHealthCheckTime ? new Date(provider.lastHealthCheckTime).toLocaleString() : t('modal.provider.neverChecked');
-        const lastHealthCheckModel = provider.lastHealthCheckModel || '-';
+        const lastHealthCheckModel = escapeHtml(provider.lastHealthCheckModel || '-');
         const healthClass = isHealthy ? 'healthy' : 'unhealthy';
         const disabledClass = isDisabled ? 'disabled' : '';
         const healthIcon = isHealthy ? 'fas fa-check-circle text-success' : 'fas fa-exclamation-triangle text-warning';
@@ -742,6 +1071,16 @@ function renderProviderList(providers) {
         const toggleButtonIcon = isDisabled ? 'fas fa-play' : 'fas fa-ban';
         const toggleButtonClass = isDisabled ? 'btn-success' : 'btn-warning';
         const needsRefresh = !!provider.needsRefresh;
+        const displayName = escapeHtml(provider.customName || provider.uuid);
+        const remark = typeof provider.remark === 'string' ? provider.remark.trim() : '';
+        const safeRemark = escapeHtml(remark);
+        const remarkSummaryHtml = remark ? `
+            <div class="provider-remark-summary" title="${safeRemark}">
+                <i class="fas fa-comment-dots"></i>
+                <span class="remark-label">${t('modal.provider.remark')}:</span>
+                <span class="remark-text">${safeRemark}</span>
+            </div>
+        ` : '';
         
         // 构建错误信息显示
         let errorInfoHtml = '';
@@ -761,9 +1100,10 @@ function renderProviderList(providers) {
                 <div class="provider-item-header" onclick="window.toggleProviderDetails('${provider.uuid}')">
                     <div class="provider-info">
                         <div class="provider-name">
-                            ${provider.customName || provider.uuid}
+                            ${displayName}
                             ${needsRefresh ? `<span class="badge badge-warning" style="font-size: 10px; margin-left: 8px; vertical-align: middle;"><i class="fas fa-sync-alt fa-spin"></i> <span data-i18n="providers.status.needsRefresh">${t('providers.status.needsRefresh')}</span></span>` : ''}
                         </div>
+                        ${remarkSummaryHtml}
                         <div class="provider-meta">
                             <span class="health-status">
                                 <i class="${healthIcon}"></i>
@@ -831,7 +1171,7 @@ function renderProviderConfig(provider) {
     
     // 先渲染基础配置字段（customName、checkModelName 和 checkHealth）
     let html = '<div class="form-grid">';
-    const baseFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit'];
+    const baseFields = ['customName', 'remark', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit'];
     
     baseFields.forEach(fieldKey => {
         const displayLabel = getFieldLabel(fieldKey);
@@ -840,7 +1180,15 @@ function renderProviderConfig(provider) {
         
         // 查找字段定义以获取 placeholder
         const fieldDef = fieldConfigs.find(f => f.id === fieldKey) || fieldConfigs.find(f => f.id.toUpperCase() === fieldKey.toUpperCase()) || {};
-        const placeholder = fieldDef.placeholder || (fieldKey === 'customName' ? '节点自定义名称' : (fieldKey === 'checkModelName' ? '例如: gpt-3.5-turbo' : (fieldKey === 'concurrencyLimit' ? '最大并发, 默认0不限制' : (fieldKey === 'queueLimit' ? '最大队列, 默认0不限制' : ''))));
+        const placeholder = fieldDef.placeholder || (fieldKey === 'customName'
+            ? '节点自定义名称'
+            : (fieldKey === 'remark'
+                ? t('modal.provider.remarkPlaceholder')
+                : (fieldKey === 'checkModelName'
+                    ? '例如: gpt-3.5-turbo'
+                    : (fieldKey === 'concurrencyLimit'
+                        ? '最大并发, 默认0不限制'
+                        : (fieldKey === 'queueLimit' ? '最大队列, 默认0不限制' : '')))));
         
         // 如果是 customName 字段，使用普通文本输入框
         if (fieldKey === 'customName') {
@@ -1058,13 +1406,13 @@ function renderProviderConfig(provider) {
  * @returns {Array} 字段名数组
  */
 function getFieldOrder(provider) {
-    const orderedFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit'];
+    const orderedFields = ['customName', 'remark', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit'];
     
     // 需要排除的内部状态字段
     const excludedFields = [
         'isHealthy', 'lastUsed', 'usageCount', 'errorCount', 'lastErrorTime',
         'uuid', 'isDisabled', 'lastHealthCheckTime', 'lastHealthCheckModel', 'lastErrorMessage',
-        'notSupportedModels', 'supportedModels', 'refreshCount', 'needsRefresh', '_lastSelectionSeq'
+        'notSupportedModels', 'supportedModels', 'modelMapping', 'refreshCount', 'needsRefresh', '_lastSelectionSeq'
     ];
     
     // 尝试从当前模态框上下文中获取提供商类型
@@ -1469,6 +1817,10 @@ function showAddProviderForm(providerType) {
                 <input type="text" id="newCustomName" data-i18n="modal.provider.customName" placeholder="例如: 我的节点1">
             </div>
             <div class="form-group">
+                <label><span data-i18n="modal.provider.remark">备注信息</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
+                <input type="text" id="newRemark" data-i18n-placeholder="modal.provider.remarkPlaceholder" placeholder="例如: 海外节点 / 备用节点">
+            </div>
+            <div class="form-group">
                 <label><span data-i18n="modal.provider.checkModelName">检查模型名称</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
                 <input type="text" id="newCheckModelName" data-i18n="modal.provider.checkModelName" placeholder="例如: gpt-3.5-turbo">
             </div>
@@ -1524,7 +1876,7 @@ function addDynamicConfigFields(form, providerType) {
     const allFields = getProviderTypeFields(providerType);
     
     // 过滤掉已经在 form-grid 中硬编码显示的五个基础字段，避免重复
-    const baseFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit'];
+    const baseFields = ['customName', 'remark', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit'];
     const filteredFields = allFields.filter(f => !baseFields.some(bf => f.id.toLowerCase().includes(bf.toLowerCase())));
 
     let fields = '';
@@ -1660,6 +2012,7 @@ function bindAddFormPasswordToggleListeners(form) {
  */
 async function addProvider(providerType) {
     const customName = document.getElementById('newCustomName')?.value;
+    const remark = document.getElementById('newRemark')?.value;
     const checkModelName = document.getElementById('newCheckModelName')?.value;
     const checkHealth = document.getElementById('newCheckHealth')?.value === 'true';
     const concurrencyLimit = parseInt(document.getElementById('newConcurrencyLimit')?.value || '0');
@@ -1667,6 +2020,7 @@ async function addProvider(providerType) {
     
     const providerConfig = {
         customName: customName || '', // 允许为空
+        remark: remark || '', // 允许为空
         checkModelName: checkModelName || '', // 允许为空
         checkHealth,
         concurrencyLimit,
@@ -1762,6 +2116,12 @@ async function resetAllProvidersHealth(providerType) {
             
             // 刷新提供商配置显示
             await refreshProviderConfig(providerType);
+
+            showHealthCheckReportModal(providerType, results || [], {
+                successCount,
+                failCount,
+                skippedCount
+            });
         } else {
             showToast(t('common.error'), t('modal.provider.resetHealth.failed'), 'error');
         }
@@ -1769,6 +2129,117 @@ async function resetAllProvidersHealth(providerType) {
         console.error('重置健康状态失败:', error);
         showToast(t('common.error'), t('modal.provider.resetHealth.failed') + ': ' + error.message, 'error');
     }
+}
+
+function getHealthCheckResultStatus(result) {
+    if (result?.success === true) return 'healthy';
+    if (result?.success === false) return 'failed';
+    return 'skipped';
+}
+
+function getHealthCheckReasonLabel(reason) {
+    if (reason === 'disabled') return t('modal.provider.healthCheck.reason.disabled');
+    if (reason === 'checkHealthDisabled') return t('modal.provider.healthCheck.reason.checkHealthDisabled');
+    return t('modal.provider.healthCheck.reason.other');
+}
+
+function renderHealthCheckResultRows(results = []) {
+    if (!Array.isArray(results) || results.length === 0) {
+        return `
+            <div class="health-check-report-empty">
+                ${escapeHtml(t('modal.provider.healthCheck.reportNoResults'))}
+            </div>
+        `;
+    }
+
+    return results.map(result => {
+        const status = getHealthCheckResultStatus(result);
+        const statusLabel = t(`modal.provider.healthCheck.status.${status}`);
+        const reasonLabel = status === 'skipped'
+            ? getHealthCheckReasonLabel(result.reason || 'other')
+            : '-';
+        const modelName = result.modelName || '-';
+        const message = result.message || '-';
+
+        return `
+            <div class="health-check-result-item health-check-result-${status}">
+                <div class="health-check-result-main">
+                    <span class="health-check-result-uuid" title="${escapeHtml(result.uuid || '-')}">${escapeHtml(result.uuid || '-')}</span>
+                    <span class="health-check-result-status">${escapeHtml(statusLabel)}</span>
+                </div>
+                <div class="health-check-result-meta">
+                    <span><strong>${escapeHtml(t('modal.provider.healthCheck.reportModel'))}:</strong> ${escapeHtml(modelName)}</span>
+                    <span><strong>${escapeHtml(t('modal.provider.healthCheck.reportReason'))}:</strong> ${escapeHtml(reasonLabel)}</span>
+                </div>
+                <div class="health-check-result-message">
+                    <strong>${escapeHtml(t('modal.provider.healthCheck.reportMessage'))}:</strong> ${escapeHtml(message)}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function showHealthCheckReportModal(providerType, results = [], summary = {}) {
+    const existingOverlay = document.querySelector('.health-check-report-overlay');
+    if (existingOverlay) {
+        existingOverlay.remove();
+    }
+
+    const { successCount = 0, failCount = 0, skippedCount = 0 } = summary;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay health-check-report-overlay';
+    overlay.style.display = 'flex';
+    overlay.innerHTML = `
+        <div class="modal-content health-check-report-modal">
+            <div class="modal-header">
+                <h3>
+                    <i class="fas fa-notes-medical"></i>
+                    ${escapeHtml(t('modal.provider.healthCheck.reportTitle', { type: providerType }))}
+                </h3>
+                <button class="modal-close" type="button" aria-label="${escapeHtml(t('common.close'))}">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="health-check-report-summary">
+                    ${escapeHtml(t('modal.provider.healthCheck.reportSummary', {
+                        success: successCount,
+                        fail: failCount,
+                        skipped: skippedCount
+                    }))}
+                </div>
+                <div class="health-check-report-list">
+                    ${renderHealthCheckResultRows(results)}
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary health-check-report-close">
+                    ${escapeHtml(t('common.confirm'))}
+                </button>
+            </div>
+        </div>
+    `;
+
+    const closeModal = () => {
+        overlay.remove();
+        document.removeEventListener('keydown', handleEsc);
+    };
+
+    const handleEsc = (event) => {
+        if (event.key === 'Escape') {
+            closeModal();
+        }
+    };
+
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) {
+            closeModal();
+        }
+    });
+    overlay.querySelector('.modal-close')?.addEventListener('click', closeModal);
+    overlay.querySelector('.health-check-report-close')?.addEventListener('click', closeModal);
+    document.addEventListener('keydown', handleEsc);
+    document.body.appendChild(overlay);
 }
 
 /**
@@ -1789,14 +2260,37 @@ async function performHealthCheck(providerType) {
         );
         
         if (response.success) {
-            const { successCount, failCount, totalCount, results } = response;
+            const { successCount, failCount, skippedCount: skippedCountFromApi, totalCount, results } = response;
             
-            // 统计跳过的数量（checkHealth 未启用的）
-            const skippedCount = results ? results.filter(r => r.success === null).length : 0;
+            // 兼容旧版本后端：优先使用后端返回的 skippedCount，否则前端自行统计
+            const skippedCount = Number.isInteger(skippedCountFromApi)
+                ? skippedCountFromApi
+                : (results ? results.filter(r => r.success === null).length : 0);
+            const skippedByReason = (results || []).reduce((acc, item) => {
+                if (item && item.success === null) {
+                    const reason = item.reason || 'other';
+                    acc[reason] = (acc[reason] || 0) + 1;
+                }
+                return acc;
+            }, {});
+            const skippedDisabledCount = skippedByReason.disabled || 0;
+            const skippedCheckHealthCount = skippedByReason.checkHealthDisabled || 0;
+            const skippedOtherCount = Math.max(0, skippedCount - skippedDisabledCount - skippedCheckHealthCount);
             
             let message = `${t('modal.provider.healthCheck.complete', { success: successCount })}`;
             if (failCount > 0) message += t('modal.provider.healthCheck.abnormal', { fail: failCount });
-            if (skippedCount > 0) message += t('modal.provider.healthCheck.skipped', { skipped: skippedCount });
+            if (skippedCount > 0) {
+                message += t('modal.provider.healthCheck.skipped', { skipped: skippedCount });
+                if (skippedDisabledCount > 0) {
+                    message += t('modal.provider.healthCheck.skippedDisabled', { count: skippedDisabledCount });
+                }
+                if (skippedCheckHealthCount > 0) {
+                    message += t('modal.provider.healthCheck.skippedCheckHealth', { count: skippedCheckHealthCount });
+                }
+                if (skippedOtherCount > 0) {
+                    message += t('modal.provider.healthCheck.skippedOther', { count: skippedOtherCount });
+                }
+            }
             
             showToast(t('common.info'), message, failCount > 0 ? 'warning' : 'success');
             

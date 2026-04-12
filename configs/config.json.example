@@ -15,6 +15,7 @@
     "REQUEST_BASE_DELAY": 1000,
     "CRON_NEAR_MINUTES": 1,
     "CRON_REFRESH_TOKEN": false,
+    "GITHUB_REPO_URL": "https://github.com/justlovemaki/AIClient-2-API",
     "PROVIDER_POOLS_FILE_PATH": "configs/provider_pools.json",
     "MAX_ERROR_COUNT": 3,
     "GROK_COOKIE_TOKEN": "your-sso-cookie-token",

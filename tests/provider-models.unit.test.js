@@ -1,7 +1,9 @@
 import { describe, expect, test } from '@jest/globals';
 import {
     extractModelIdsFromNativeList,
+    getMappedModel,
     getConfiguredSupportedModels,
+    normalizeModelMapping,
     usesManagedModelList
 } from '../src/providers/provider-models.js';
 
@@ -29,5 +31,30 @@ describe('provider-models helpers', () => {
                 { id: 'gpt-4.1' }
             ]
         }, 'openai-custom')).toEqual(['gpt-4.1', 'gpt-4o-mini']);
+    });
+
+    test('normalizes model mapping config', () => {
+        expect(normalizeModelMapping({
+            ' gpt-4o ': ' gpt-4.1 ',
+            '': 'gpt-4o-mini',
+            foo: '',
+            bar: 123
+        })).toEqual({
+            'gpt-4o': 'gpt-4.1'
+        });
+    });
+
+    test('resolves mapped model from provider config', () => {
+        expect(getMappedModel({
+            modelMapping: {
+                'gpt-4o': 'gpt-4.1'
+            }
+        }, 'gpt-4o')).toBe('gpt-4.1');
+
+        expect(getMappedModel({
+            modelMapping: {
+                'gpt-4o': 'gpt-4.1'
+            }
+        }, 'gpt-5')).toBeNull();
     });
 });

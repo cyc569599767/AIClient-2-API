@@ -7,12 +7,36 @@ import { t } from './i18n.js';
  * 初始化路径路由示例功能
  */
 function initRoutingExamples() {
-    // 延迟初始化，确保所有DOM都加载完成
     setTimeout(() => {
         initProtocolTabs();
         initCopyButtons();
         initCardInteractions();
     }, 100);
+}
+
+function setRoutingCardCollapsed(card, collapsed) {
+    if (!card) return;
+
+    card.classList.toggle('collapsed', collapsed);
+
+    const header = card.querySelector('.routing-card-header');
+    if (header) {
+        header.setAttribute('aria-expanded', String(!collapsed));
+    }
+
+    const content = card.querySelector('.routing-card-content');
+    if (content) {
+        content.hidden = collapsed;
+    }
+}
+
+function collapseOtherRoutingCards(currentCard) {
+    const cards = document.querySelectorAll('.routing-example-card');
+    cards.forEach((card) => {
+        if (card !== currentCard) {
+            setRoutingCardCollapsed(card, true);
+        }
+    });
 }
 
 /**
@@ -98,7 +122,38 @@ function initCardInteractions() {
     const routingCards = document.querySelectorAll('.routing-example-card');
     
     routingCards.forEach(card => {
-        // 添加悬停效果
+        if (card.dataset.interactionsBound === 'true') {
+            return;
+        }
+        card.dataset.interactionsBound = 'true';
+
+        const header = card.querySelector('.routing-card-header');
+        if (header) {
+            const toggleCard = () => {
+                const isCollapsed = card.classList.contains('collapsed');
+                if (isCollapsed) {
+                    collapseOtherRoutingCards(card);
+                    setRoutingCardCollapsed(card, false);
+                    return;
+                }
+                setRoutingCardCollapsed(card, true);
+            };
+
+            header.addEventListener('click', (e) => {
+                if (e.target.closest('.copy-btn, .protocol-tab')) {
+                    return;
+                }
+                toggleCard();
+            });
+
+            header.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    toggleCard();
+                }
+            });
+        }
+
         card.addEventListener('mouseenter', () => {
             card.style.transform = 'translateY(-4px)';
             card.style.boxShadow = 'var(--shadow-lg)';
@@ -247,8 +302,11 @@ function getAvailableRoutes() {
  * @param {string} provider - 提供商标识
  */
 function highlightProviderRoute(provider) {
-    const card = document.querySelector(`[data-provider="${provider}"]`);
+    const card = document.querySelector(`[data-provider="${provider}"]`) ||
+        document.querySelector(`[data-provider="${provider}-card"]`);
     if (card) {
+        collapseOtherRoutingCards(card);
+        setRoutingCardCollapsed(card, false);
         card.scrollIntoView({ behavior: 'smooth', block: 'center' });
         card.style.borderColor = 'var(--success-color)';
         card.style.boxShadow = '0 0 0 3px rgba(16, 185, 129, 0.1)';
@@ -448,7 +506,7 @@ function renderRoutingExamples(providerConfigs) {
         'openaiResponses-custom': 'gpt-4o'
     };
 
-    providerConfigs.forEach(config => {
+    providerConfigs.forEach((config, index) => {
         if (config.visible === false) return;
         
         let routeInfo = routes.find(r => r.provider === config.id);
@@ -505,16 +563,20 @@ function renderRoutingExamples(providerConfigs) {
                          `${window.location.protocol}//${window.location.host}`;
 
         const card = document.createElement('div');
-        card.className = 'routing-example-card';
+        card.className = 'routing-example-card collapsed';
         card.dataset.provider = `${config.id}-card`;
+        const contentId = `routing-card-content-${config.id}-${index}`;
         
         card.innerHTML = `
-            <div class="routing-card-header">
+            <div class="routing-card-header" role="button" tabindex="0" aria-expanded="false" aria-controls="${contentId}">
                 <i class="fas ${icon}"></i>
                 <h4>${routeInfo.name}</h4>
                 <span class="provider-badge ${routeInfo.badgeClass}">${routeInfo.badge}</span>
+                <span class="routing-card-toggle" aria-hidden="true">
+                    <i class="fas fa-chevron-down"></i>
+                </span>
             </div>
-            <div class="routing-card-content">
+            <div class="routing-card-content" id="${contentId}" hidden>
                 <div class="protocol-tabs">
                     <button class="protocol-tab ${config.id === 'openai-codex-oauth' ? '' : 'active'}" data-protocol="openai" data-i18n="dashboard.routing.openai">${t('dashboard.routing.openai')}</button>
                     <button class="protocol-tab ${config.id === 'openai-codex-oauth' ? 'active' : ''}" data-protocol="claude" data-i18n="dashboard.routing.claude">${t('dashboard.routing.claude')}</button>

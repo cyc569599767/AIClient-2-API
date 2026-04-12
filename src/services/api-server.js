@@ -357,10 +357,6 @@ async function startServer() {
         }
         // 服务器完全启动后,执行初始健康检查
         const poolManager = getProviderPoolManager();
-        if (poolManager) {
-            logger.info('[Initialization] Performing initial health checks for provider pools...');
-            poolManager.performInitialHealthChecks();
-        }
 
         // 定时健康检查
         // 注意：无论初始 enabled 状态如何，都注册 reloadHealthCheckTimer，

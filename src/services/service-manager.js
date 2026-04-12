@@ -13,6 +13,7 @@ import {
     getFileName,
     formatSystemPath
 } from '../utils/provider-utils.js';
+import { getMappedModel } from '../providers/provider-models.js';
 import { MODEL_PROVIDER } from '../utils/constants.js';
 
 // 存储 ProviderPoolManager 实例
@@ -507,6 +508,12 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
         throw new Error(`[API Service] Auto-routing failed: Model name must include a provider prefix (e.g., 'provider:model'). Received: '${actualModelName}'`);
     }
     
+    const mappedModel = getMappedModel(serviceConfig, actualModel);
+    if (mappedModel && mappedModel !== actualModel) {
+        logger.info(`[Routing] Provider model mapping applied: ${actualModel} -> ${mappedModel}`);
+        actualModel = mappedModel;
+    }
+
     const service = getServiceAdapter(serviceConfig);
     
     return {

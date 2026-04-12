@@ -144,6 +144,38 @@ export function normalizeModelIds(models = []) {
     )].sort((a, b) => a.localeCompare(b));
 }
 
+export function normalizeModelMapping(modelMapping = {}) {
+    if (!modelMapping || typeof modelMapping !== 'object' || Array.isArray(modelMapping)) {
+        return {};
+    }
+
+    const normalized = {};
+    Object.entries(modelMapping).forEach(([requestedModel, targetModel]) => {
+        if (typeof requestedModel !== 'string' || typeof targetModel !== 'string') {
+            return;
+        }
+
+        const normalizedRequestedModel = requestedModel.trim();
+        const normalizedTargetModel = targetModel.trim();
+        if (!normalizedRequestedModel || !normalizedTargetModel) {
+            return;
+        }
+
+        normalized[normalizedRequestedModel] = normalizedTargetModel;
+    });
+
+    return normalized;
+}
+
+export function getMappedModel(providerConfig = {}, requestedModel = '') {
+    if (!requestedModel || typeof requestedModel !== 'string') {
+        return null;
+    }
+
+    const normalizedMapping = normalizeModelMapping(providerConfig?.modelMapping);
+    return normalizedMapping[requestedModel] || null;
+}
+
 function extractModelIdsFromListShape(modelList) {
     if (!modelList) {
         return [];

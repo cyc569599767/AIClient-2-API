@@ -1,0 +1,30 @@
+{
+  "openai-custom": [
+    {
+      "uuid": "disabled-node",
+      "isHealthy": false,
+      "isDisabled": true,
+      "checkHealth": true,
+      "usageCount": 2,
+      "errorCount": 1
+    },
+    {
+      "uuid": "skipped-node",
+      "isHealthy": false,
+      "isDisabled": false,
+      "checkHealth": false,
+      "usageCount": 3,
+      "errorCount": 1
+    },
+    {
+      "uuid": "checked-node",
+      "isHealthy": true,
+      "isDisabled": false,
+      "checkHealth": true,
+      "checkModelName": "gpt-4o-mini",
+      "usageCount": 4,
+      "errorCount": 0,
+      "lastHealthCheckModel": "gpt-4o-mini"
+    }
+  ]
+}
