@@ -18,6 +18,26 @@ import { MODEL_PROVIDER } from '../utils/constants.js';
 
 // 存储 ProviderPoolManager 实例
 let providerPoolManager = null;
+let currentProviderRouting = {};
+
+function recordCurrentProviderRouting(baseProviderType, selectedProviderConfig, actualProviderType, modelName) {
+    if (!baseProviderType || !selectedProviderConfig?.uuid) {
+        return;
+    }
+
+    currentProviderRouting[baseProviderType] = {
+        baseProviderType,
+        providerType: actualProviderType || baseProviderType,
+        uuid: selectedProviderConfig.uuid,
+        providerName: selectedProviderConfig.customName || selectedProviderConfig.uuid,
+        model: modelName || null,
+        updatedAt: new Date().toISOString()
+    };
+}
+
+export function getCurrentProviderRouting() {
+    return { ...currentProviderRouting };
+}
 
 /**
  * 扫描 configs 目录并自动关联未关联的配置文件到对应的提供商
@@ -414,17 +434,25 @@ export async function getApiService(config, requestedModel = null, options = {})
     let serviceConfig = config;
     const isPoolable = PROVIDER_MAPPINGS.some(m => m.providerType === config.MODEL_PROVIDER);
     if (providerPoolManager && ((config.providerPools && config.providerPools[config.MODEL_PROVIDER]) || isPoolable)) {
-        // 如果有号池管理器，并且当前模型提供者类型有对应的号池（或属于号池类型提供商），则从号池中选择一个提供者配置
-        // selectProvider 现在是异步的，使用链式锁确保并发安全
-        const selectedProviderConfig = await providerPoolManager.selectProvider(config.MODEL_PROVIDER, actualModelName, { ...options, skipUsageCount: true });
-        if (selectedProviderConfig) {
+        // 优先当前分组；当父分组没有节点时，自动尝试其子分组（不使用跨提供商 fallback chain）
+        const selectedResult = await providerPoolManager.selectProviderWithFallback(config.MODEL_PROVIDER, actualModelName, {
+            ...options,
+            skipUsageCount: true,
+            disableConfiguredFallback: true
+        });
+        if (selectedResult) {
+            const selectedProviderConfig = selectedResult.config;
+            const actualProviderType = selectedResult.actualProviderType || config.MODEL_PROVIDER;
             // 合并选中的提供者配置到当前请求的 config 中
             serviceConfig = deepmerge(config, selectedProviderConfig);
+            serviceConfig.MODEL_PROVIDER = actualProviderType;
             delete serviceConfig.providerPools; // 移除 providerPools 属性
             config.uuid = serviceConfig.uuid;
             config.customName = serviceConfig.customName;
+            config.actualProviderType = actualProviderType;
+            recordCurrentProviderRouting(config.MODEL_PROVIDER, selectedProviderConfig, actualProviderType, actualModelName);
             const customNameDisplay = serviceConfig.customName ? ` (${serviceConfig.customName})` : '';
-            logger.info(`[API Service] Using pooled configuration for ${config.MODEL_PROVIDER}: ${serviceConfig.uuid}${customNameDisplay}${actualModelName ? ` (model: ${actualModelName})` : ''}`);
+            logger.info(`[API Service] Using pooled configuration for ${config.MODEL_PROVIDER}${actualProviderType !== config.MODEL_PROVIDER ? ` -> ${actualProviderType}` : ''}: ${serviceConfig.uuid}${customNameDisplay}${actualModelName ? ` (model: ${actualModelName})` : ''}`);
         } else {
             const errorMsg = `[API Service] No healthy provider found in pool for ${config.MODEL_PROVIDER}${actualModelName ? ` supporting model: ${actualModelName}` : ''}`;
             logger.error(errorMsg);
@@ -512,6 +540,15 @@ export async function getApiServiceWithFallback(config, requestedModel = null, o
     if (mappedModel && mappedModel !== actualModel) {
         logger.info(`[Routing] Provider model mapping applied: ${actualModel} -> ${mappedModel}`);
         actualModel = mappedModel;
+    }
+
+    if (selectedUuid) {
+        recordCurrentProviderRouting(
+            config.MODEL_PROVIDER,
+            { uuid: selectedUuid, customName: serviceConfig.customName || null },
+            actualProviderType,
+            actualModel
+        );
     }
 
     const service = getServiceAdapter(serviceConfig);

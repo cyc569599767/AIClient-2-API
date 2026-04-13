@@ -1,7 +1,7 @@
 // 提供商管理功能模块
 
 import { providerStats, updateProviderStats } from './constants.js';
-import { showToast, formatUptime, getProviderConfigs, getBaseProviderConfigs } from './utils.js';
+import { showToast, showConfirmModal, formatUptime, getProviderConfigs, getBaseProviderConfigs } from './utils.js';
 import { fileUploadHandler } from './file-upload.js';
 import { t, getCurrentLanguage } from './i18n.js';
 import { renderRoutingExamples } from './routing-examples.js';
@@ -18,6 +18,111 @@ let initialUptime = null;
 let initialLoadTime = null;
 let isStaticProviderConfigsUpdated = false;
 let cachedSupportedProviders = null;
+const PROVIDER_ORDER_STORAGE_KEY = 'providers.customDisplayOrder';
+const GROUPABLE_PROVIDER_TYPES = ['claude-custom', 'openai-custom', 'openaiResponses-custom'];
+
+function escapeHtml(text = '') {
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function getCurrentRouteInfo(providerType, currentRouting = {}) {
+    const route = currentRouting?.[providerType];
+    if (!route) {
+        return null;
+    }
+
+    return {
+        providerName: route.providerName || route.uuid || '-',
+        modelName: route.model || '-'
+    };
+}
+
+function loadCustomProviderOrder() {
+    try {
+        const raw = localStorage.getItem(PROVIDER_ORDER_STORAGE_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string' && item) : [];
+    } catch (error) {
+        console.warn('Failed to load custom provider order:', error);
+        return [];
+    }
+}
+
+function saveCustomProviderOrder(order = []) {
+    try {
+        localStorage.setItem(PROVIDER_ORDER_STORAGE_KEY, JSON.stringify(order));
+    } catch (error) {
+        console.warn('Failed to save custom provider order:', error);
+    }
+}
+
+function applyCustomProviderOrder(providerTypes = [], customOrder = []) {
+    if (!Array.isArray(providerTypes) || providerTypes.length === 0) {
+        return [];
+    }
+
+    const source = [...new Set(providerTypes)];
+    const orderSet = new Set(customOrder);
+    const ordered = customOrder.filter(type => source.includes(type));
+    const remaining = source.filter(type => !orderSet.has(type));
+    return [...ordered, ...remaining];
+}
+
+function moveProviderInOrder(currentOrder = [], providerType, direction = 0) {
+    const order = [...currentOrder];
+    const index = order.indexOf(providerType);
+    if (index < 0) return null;
+    const target = index + direction;
+    if (target < 0 || target >= order.length) return null;
+
+    [order[index], order[target]] = [order[target], order[index]];
+    return order;
+}
+
+function getParentBaseProviderType(providerType, baseProviderTypes = []) {
+    return baseProviderTypes.find(baseType =>
+        providerType !== baseType && providerType.startsWith(`${baseType}-`)
+    ) || null;
+}
+
+function buildHierarchicalProviderTypes(providerTypes = [], baseProviderTypes = []) {
+    const uniqueTypes = [...new Set(providerTypes)];
+    const childrenMap = new Map();
+    const roots = [];
+
+    uniqueTypes.forEach(type => {
+        const parent = getParentBaseProviderType(type, baseProviderTypes);
+        if (parent && uniqueTypes.includes(parent)) {
+            if (!childrenMap.has(parent)) {
+                childrenMap.set(parent, []);
+            }
+            childrenMap.get(parent).push(type);
+        } else {
+            roots.push(type);
+        }
+    });
+
+    const ordered = [];
+    roots.forEach(root => {
+        ordered.push(root);
+        const children = childrenMap.get(root) || [];
+        ordered.push(...children);
+    });
+
+    uniqueTypes.forEach(type => {
+        if (!ordered.includes(type)) {
+            ordered.push(type);
+        }
+    });
+
+    return ordered;
+}
 
 /**
  * 加载系统信息
@@ -187,7 +292,7 @@ async function loadProviders(forceRefreshSupported = false) {
         const data = await window.apiClient.get('/providers');
         if (!data || !data.providers) return;
 
-        const { providers, supportedProviders } = data;
+        const { providers, supportedProviders, currentRouting = {} } = data;
         
         // 检查支持列表是否发生了变化（或者是否尚未初始化）
         const isChanged = !cachedSupportedProviders || 
@@ -212,7 +317,7 @@ async function loadProviders(forceRefreshSupported = false) {
             isStaticProviderConfigsUpdated = true;
         }
 
-        renderProviders(providers, cachedSupportedProviders);
+        renderProviders(providers, cachedSupportedProviders, currentRouting);
     } catch (error) {
         console.error('Failed to load providers:', error);
     }
@@ -223,7 +328,7 @@ async function loadProviders(forceRefreshSupported = false) {
  * @param {Object} providers - 提供商数据
  * @param {string[]} supportedProviders - 已注册的提供商类型列表
  */
-function renderProviders(providers, supportedProviders = []) {
+function renderProviders(providers, supportedProviders = [], currentRouting = {}) {
     const container = document.getElementById('providersList');
     if (!container) return;
     
@@ -262,22 +367,30 @@ function renderProviders(providers, supportedProviders = []) {
     // 过滤掉明确设置为不显示的提供商
     const sortedProviderTypes = providerDisplayOrder.filter(type => allProviderTypes.includes(type))
         .concat(allProviderTypes.filter(type => !providerDisplayOrder.some(t => t === type) && !configMap[type]?.visible === false));
+    const orderedProviderTypes = applyCustomProviderOrder(sortedProviderTypes, loadCustomProviderOrder());
+    const baseProviderTypes = getBaseProviderConfigs().map(config => config.id);
+    const hierarchicalProviderTypes = buildHierarchicalProviderTypes(orderedProviderTypes, baseProviderTypes);
     
     // 计算总统计
     let totalAccounts = 0;
     let totalHealthy = 0;
     
     // 按照排序后的提供商类型渲染
-    sortedProviderTypes.forEach((providerType) => {
+    hierarchicalProviderTypes.forEach((providerType, index) => {
         // 如果配置中明确设置为不显示，则跳过
         if (configMap[providerType] && configMap[providerType].visible === false) {
             return;
         }
 
         const accounts = hasProviders ? providers[providerType] || [] : [];
+        const parentProviderType = getParentBaseProviderType(providerType, baseProviderTypes);
+        const isSubGroup = !!parentProviderType;
         const providerDiv = document.createElement('div');
-        providerDiv.className = 'provider-item';
+        providerDiv.className = `provider-item${isSubGroup ? ' provider-subgroup-item' : ''}`;
         providerDiv.dataset.providerType = providerType;
+        if (parentProviderType) {
+            providerDiv.dataset.parentProviderType = parentProviderType;
+        }
         providerDiv.style.cursor = 'pointer';
 
         const healthyCount = accounts.filter(acc => acc.isHealthy && !acc.isDisabled).length;
@@ -313,38 +426,67 @@ function renderProviders(providers, supportedProviders = []) {
         const statusText = isEmptyState ? t('providers.status.empty') : t('providers.status.healthy', { healthy: healthyCount, total: totalCount });
 
         // 获取显示名称
-        const displayName = configMap[providerType]?.name || providerType;
+        const displayName = isSubGroup
+            ? providerType.substring(parentProviderType.length + 1) || (configMap[providerType]?.name || providerType)
+            : (configMap[providerType]?.name || providerType);
+        const currentRouteInfo = !isSubGroup ? getCurrentRouteInfo(providerType, currentRouting) : null;
+        const currentRouteText = currentRouteInfo
+            ? `${t('providers.currentRoute.provider')}: ${currentRouteInfo.providerName}  ${t('providers.currentRoute.model')}: ${currentRouteInfo.modelName}`
+            : t('providers.currentRoute.none');
+        const currentRouteTextEscaped = escapeHtml(currentRouteText);
 
         providerDiv.innerHTML = `
             <div class="provider-header">
-                <div class="provider-name">
-                    <span class="provider-type-text">${displayName}</span>
+                <div class="provider-main-inline">
+                    <div class="provider-name">
+                        ${isSubGroup ? '<span class="provider-subgroup-prefix"><i class="fas fa-level-up-alt"></i></span>' : ''}
+                        <span class="provider-type-text">${displayName}</span>
+                    </div>
+                    <div class="provider-inline-stats">
+                        <span class="provider-inline-stat">
+                            <span class="provider-inline-stat-label" data-i18n="providers.stat.totalAccounts">${t('providers.stat.totalAccounts')}</span>
+                            <span class="provider-inline-stat-value">${totalCount}</span>
+                        </span>
+                        <span class="provider-inline-stat">
+                            <span class="provider-inline-stat-label" data-i18n="providers.stat.healthyAccounts">${t('providers.stat.healthyAccounts')}</span>
+                            <span class="provider-inline-stat-value">${healthyCount}</span>
+                        </span>
+                        <span class="provider-inline-stat">
+                            <span class="provider-inline-stat-label" data-i18n="providers.stat.usageCount">${t('providers.stat.usageCount')}</span>
+                            <span class="provider-inline-stat-value">${usageCount}</span>
+                        </span>
+                        <span class="provider-inline-stat">
+                            <span class="provider-inline-stat-label" data-i18n="providers.stat.errorCount">${t('providers.stat.errorCount')}</span>
+                            <span class="provider-inline-stat-value">${errorCount}</span>
+                        </span>
+                    </div>
+                    ${!isSubGroup ? `
+                    <div class="provider-current-route-inline">
+                        <span class="provider-current-route-inline-label" data-i18n="providers.currentRoute.label">${t('providers.currentRoute.label')}</span>
+                        <span class="provider-current-route-inline-value">${currentRouteTextEscaped}</span>
+                    </div>` : ''}
                 </div>
                 <div class="provider-header-right">
+                    ${!isSubGroup ? `
+                    <div class="provider-current-route-pill" title="${currentRouteTextEscaped}">
+                        <i class="fas fa-satellite-dish"></i>
+                        <span>${currentRouteTextEscaped}</span>
+                    </div>` : ''}
+                    <div class="provider-order-controls">
+                        <button type="button" class="provider-order-btn move-up-btn" title="上移" ${index === 0 ? 'disabled' : ''}>
+                            <i class="fas fa-chevron-up"></i>
+                        </button>
+                        <button type="button" class="provider-order-btn move-down-btn" title="下移" ${index === orderedProviderTypes.length - 1 ? 'disabled' : ''}>
+                            <i class="fas fa-chevron-down"></i>
+                        </button>
+                    </div>
                     ${generateAddGroupButton(providerType)}
                     ${generateAuthButton(providerType)}
+                    ${generateDeleteGroupButton(providerType)}
                     <div class="provider-status ${statusClass}">
                         <i class="fas fa-${statusIcon}"></i>
                         <span>${statusText}</span>
                     </div>
-                </div>
-            </div>
-            <div class="provider-stats">
-                <div class="provider-stat">
-                    <span class="provider-stat-label" data-i18n="providers.stat.totalAccounts">${t('providers.stat.totalAccounts')}</span>
-                    <span class="provider-stat-value">${totalCount}</span>
-                </div>
-                <div class="provider-stat">
-                    <span class="provider-stat-label" data-i18n="providers.stat.healthyAccounts">${t('providers.stat.healthyAccounts')}</span>
-                    <span class="provider-stat-value">${healthyCount}</span>
-                </div>
-                <div class="provider-stat">
-                    <span class="provider-stat-label" data-i18n="providers.stat.usageCount">${t('providers.stat.usageCount')}</span>
-                    <span class="provider-stat-value">${usageCount}</span>
-                </div>
-                <div class="provider-stat">
-                    <span class="provider-stat-label" data-i18n="providers.stat.errorCount">${t('providers.stat.errorCount')}</span>
-                    <span class="provider-stat-value">${errorCount}</span>
                 </div>
             </div>
         `;
@@ -387,21 +529,11 @@ function renderProviders(providers, supportedProviders = []) {
                         addGroupBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
                         
                         try {
-                            const response = await window.apiClient.post('/providers', {
-                                providerType: newProviderType,
-                                providerConfig: {
-                                    customName: cleanSuffix.toUpperCase(),
-                                    isHealthy: true,
-                                    isDisabled: false,
-                                    usageCount: 0,
-                                    errorCount: 0
-                                }
-                            });
+                            const response = await window.apiClient.post(`/providers/${encodeURIComponent(newProviderType)}/group`, {});
                             
                             if (response.success) {
                                 showToast(t('common.success'), t('providers.addGroup.success'), 'success');
                                 await loadProviders(true);
-                                setTimeout(() => openProviderManager(newProviderType), 500);
                             } else {
                                 throw new Error(response.error?.message || 'Unknown error');
                             }
@@ -422,6 +554,39 @@ function renderProviders(providers, supportedProviders = []) {
             authBtn.addEventListener('click', (e) => {
                 e.stopPropagation(); // 阻止事件冒泡到父元素
                 handleGenerateAuthUrl(providerType);
+            });
+        }
+
+        const deleteGroupBtn = providerDiv.querySelector('.delete-group-btn');
+        if (deleteGroupBtn) {
+            deleteGroupBtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                await deleteProviderGroup(providerType, accounts);
+            });
+        }
+
+        const moveUpBtn = providerDiv.querySelector('.move-up-btn');
+        if (moveUpBtn) {
+            moveUpBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const updatedOrder = moveProviderInOrder(orderedProviderTypes, providerType, -1);
+                if (!updatedOrder) return;
+                saveCustomProviderOrder(updatedOrder);
+                renderProviders(providers, supportedProviders, currentRouting);
+            });
+        }
+
+        const moveDownBtn = providerDiv.querySelector('.move-down-btn');
+        if (moveDownBtn) {
+            moveDownBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const updatedOrder = moveProviderInOrder(orderedProviderTypes, providerType, 1);
+                if (!updatedOrder) return;
+                saveCustomProviderOrder(updatedOrder);
+                renderProviders(providers, supportedProviders, currentRouting);
             });
         }
     });
@@ -512,6 +677,35 @@ async function openProviderManager(providerType) {
     }
 }
 
+async function deleteProviderGroup(providerType, providers = []) {
+    const count = Array.isArray(providers) ? providers.length : 0;
+    const confirmed = await showConfirmModal({
+        title: t('providers.deleteGroup.title'),
+        message: count > 0
+            ? t('providers.deleteGroup.confirmWithCount', { providerType, count })
+            : t('providers.deleteGroup.confirm', { providerType }),
+        detail: count > 0
+            ? t('providers.deleteGroup.warningWithCount', { count })
+            : t('providers.deleteGroup.warningEmpty'),
+        confirmText: t('providers.deleteGroup.confirmButton'),
+        confirmButtonClass: 'btn-danger',
+        iconClass: 'fas fa-trash-alt'
+    });
+    if (!confirmed) {
+        return;
+    }
+
+    try {
+        await window.apiClient.delete(`/providers/${encodeURIComponent(providerType)}/group`);
+        await window.apiClient.post('/reload-config');
+        showToast(t('common.success'), t('providers.deleteGroup.success'), 'success');
+        await loadProviders(true);
+    } catch (error) {
+        console.error('Failed to delete provider group:', error);
+        showToast(t('common.error'), `${t('providers.deleteGroup.error')}: ${error.message}`, 'error');
+    }
+}
+
 /**
  * 生成授权按钮HTML
  * @param {string} providerType - 提供商类型
@@ -598,8 +792,7 @@ function showSimplePrompt(title, placeholder, callback) {
  * @returns {string} 按钮HTML
  */
 function generateAddGroupButton(providerType) {
-    const allowedTypes = ['claude-custom', 'openai-custom', 'openaiResponses-custom'];
-    if (!allowedTypes.includes(providerType)) {
+    if (!GROUPABLE_PROVIDER_TYPES.includes(providerType)) {
         return '';
     }
 
@@ -607,6 +800,25 @@ function generateAddGroupButton(providerType) {
         <button class="add-group-btn" title="${t('providers.addGroup.title')}">
             <i class="fas fa-folder-plus"></i>
             <span data-i18n="providers.addGroup">${t('providers.addGroup')}</span>
+        </button>
+    `;
+}
+
+function isCustomProviderGroup(providerType = '') {
+    return GROUPABLE_PROVIDER_TYPES.some(baseType =>
+        providerType !== baseType && providerType.startsWith(`${baseType}-`)
+    );
+}
+
+function generateDeleteGroupButton(providerType) {
+    if (!isCustomProviderGroup(providerType)) {
+        return '';
+    }
+
+    return `
+        <button class="delete-group-btn" title="${t('providers.deleteGroup.title')}">
+            <i class="fas fa-trash"></i>
+            <span data-i18n="providers.deleteGroup">${t('providers.deleteGroup')}</span>
         </button>
     `;
 }
@@ -3189,7 +3401,14 @@ async function performUpdate() {
     const versionSelect = document.getElementById('versionSelect');
     const selectedVersion = versionSelect?.value || '';
 
-    if (!confirm(t('dashboard.update.confirmMsg', { version: selectedVersion }))) {
+    const confirmed = await showConfirmModal({
+        title: t('dashboard.update.confirmTitle'),
+        message: t('dashboard.update.confirmMsg', { version: selectedVersion }),
+        confirmText: t('dashboard.update.perform'),
+        confirmButtonClass: 'btn-primary',
+        iconClass: 'fas fa-cloud-download-alt'
+    });
+    if (!confirmed) {
         return;
     }
 
@@ -3379,18 +3598,8 @@ function showAddProviderGroupModal(defaultBaseType = null) {
         submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
         
         try {
-            // 创建一个带后缀的新提供商组，并添加一个初始的空配置（或者让用户在随后的模态框中添加）
-            // 这里我们先创建一个临时的空配置，这样组就会在 dashboard 中显示出来
-            const response = await window.apiClient.post('/providers', {
-                providerType: newProviderType,
-                providerConfig: {
-                    customName: suffix.toUpperCase(),
-                    isHealthy: true,
-                    isDisabled: false,
-                    usageCount: 0,
-                    errorCount: 0
-                }
-            });
+            // 仅创建分组，不默认创建提供商节点
+            const response = await window.apiClient.post(`/providers/${encodeURIComponent(newProviderType)}/group`, {});
             
             if (response.success) {
                 showToast(t('common.success'), t('providers.addGroup.success'), 'success');

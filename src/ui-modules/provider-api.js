@@ -12,6 +12,15 @@ import {
 import { generateUUID, createProviderConfig, formatSystemPath, detectProviderFromPath, addToUsedPaths, isPathUsed, pathsEqual } from '../utils/provider-utils.js';
 import { broadcastEvent } from './event-broadcast.js';
 import { getRegisteredProviders, getServiceAdapter, serviceInstances } from '../providers/adapter.js';
+import { getCurrentProviderRouting } from '../services/service-manager.js';
+
+const MANUAL_DELETE_ONLY_GROUP_BASE_TYPES = ['claude-custom', 'openai-custom', 'openaiResponses-custom'];
+
+function isManualDeleteOnlyChildGroupType(providerType = '') {
+    return MANUAL_DELETE_ONLY_GROUP_BASE_TYPES.some(baseType =>
+        providerType !== baseType && providerType.startsWith(`${baseType}-`)
+    );
+}
 
 // 文件级互斥锁：防止并发读写导致数据丢失
 // 安全净化：移除用户输入字段中的危险内容（script、事件处理器、javascript:协议等），
@@ -184,11 +193,11 @@ async function runProviderHealthCheck(providerPoolManager, providerType, provide
         const errorMessage = healthResult.errorMessage || 'Check failed';
         const isAuthError = isAuthHealthCheckError(errorMessage);
 
+        providerPoolManager.markProviderUnhealthyImmediately(providerType, providerConfig, errorMessage);
         if (isAuthError) {
-            providerPoolManager.markProviderUnhealthyImmediately(providerType, providerConfig, errorMessage);
             logger.info(`[UI API] Auth error detected for ${providerConfig.uuid}, immediately marked as unhealthy`);
         } else {
-            providerPoolManager.markProviderUnhealthy(providerType, providerConfig, errorMessage);
+            logger.warn(`[UI API] Health check warning/failure for ${providerConfig.uuid}, immediately marked as unhealthy: ${errorMessage}`);
         }
 
         providerStatus.config.lastHealthCheckTime = new Date().toISOString();
@@ -208,11 +217,11 @@ async function runProviderHealthCheck(providerPoolManager, providerType, provide
         const errorMessage = error.message || 'Unknown error';
         const isAuthError = isAuthHealthCheckError(errorMessage);
 
+        providerPoolManager.markProviderUnhealthyImmediately(providerType, providerConfig, errorMessage);
         if (isAuthError) {
-            providerPoolManager.markProviderUnhealthyImmediately(providerType, providerConfig, errorMessage);
             logger.info(`[UI API] Auth error detected for ${providerConfig.uuid}, immediately marked as unhealthy`);
         } else {
-            providerPoolManager.markProviderUnhealthy(providerType, providerConfig, errorMessage);
+            logger.warn(`[UI API] Health check warning/failure for ${providerConfig.uuid}, immediately marked as unhealthy: ${errorMessage}`);
         }
 
         providerStatus.config.lastHealthCheckTime = new Date().toISOString();
@@ -303,7 +312,8 @@ export async function handleGetProviders(req, res, currentConfig, providerPoolMa
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
         providers: sanitizeProviderPools(providerStatus, true), // 列表显示进行打码
-        supportedProviders: supportedProviders
+        supportedProviders: supportedProviders,
+        currentRouting: getCurrentProviderRouting()
     }));
     return true;
 }
@@ -329,7 +339,8 @@ export async function handleGetProviderType(req, res, currentConfig, providerPoo
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
         providerType,
-        providers: providers.map(p => sanitizeProviderData(p, true)), // 详情页也进行打码，确保即便点击显示也是脱敏数据
+        // 详情页返回真实值，前端负责脱敏展示与眼睛切换
+        providers: providers.map(p => sanitizeProviderData(p, false)),
         totalCount: providers.length,
         healthyCount: providers.filter(p => p.isHealthy).length
     }));
@@ -726,9 +737,15 @@ async function _handleDeleteProvider(req, res, currentConfig, providerPoolManage
         const deletedProvider = providers[providerIndex];
         providers.splice(providerIndex, 1);
 
-        // Remove the entire provider type if no providers left
+        // For custom child groups, keep empty group and require explicit "delete group" action.
+        // Other provider types keep the existing behavior of auto-deleting empty groups.
         if (providers.length === 0) {
-            delete providerPools[providerType];
+            if (isManualDeleteOnlyChildGroupType(providerType)) {
+                providerPools[providerType] = providers;
+                logger.info(`[UI API] Provider group ${providerType} is now empty and retained (manual group deletion required)`);
+            } else {
+                delete providerPools[providerType];
+            }
         }
 
         // Save to file
@@ -765,8 +782,143 @@ async function _handleDeleteProvider(req, res, currentConfig, providerPoolManage
 }
 
 /**
- * 禁用/启用特定提供商配置
+ * 创建提供商分组（默认不创建提供商节点）
  */
+export async function handleCreateProviderGroup(req, res, currentConfig, providerPoolManager, providerType) {
+    return withFileLock(() => _handleCreateProviderGroup(req, res, currentConfig, providerPoolManager, providerType)).catch(err => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'File operation failed: ' + err.message } }));
+        return true;
+    });
+}
+
+async function _handleCreateProviderGroup(req, res, currentConfig, providerPoolManager, providerType) {
+    try {
+        const filePath = currentConfig.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
+        let providerPools = {};
+
+        if (existsSync(filePath)) {
+            try {
+                const fileContent = readFileSync(filePath, 'utf-8');
+                providerPools = JSON.parse(fileContent);
+            } catch (readError) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: { message: 'Provider pools file not found' } }));
+                return true;
+            }
+        }
+
+        if (Object.prototype.hasOwnProperty.call(providerPools, providerType)) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: 'Provider group already exists' } }));
+            return true;
+        }
+
+        providerPools[providerType] = [];
+        writeFileSync(filePath, JSON.stringify(providerPools, null, 2), 'utf-8');
+        logger.info(`[UI API] Created provider group ${providerType} with 0 providers`);
+
+        if (providerPoolManager) {
+            providerPoolManager.providerPools = providerPools;
+            providerPoolManager.initializeProviderStatus();
+        }
+
+        broadcastEvent('config_update', {
+            action: 'create_group',
+            filePath,
+            providerType,
+            timestamp: new Date().toISOString()
+        });
+
+        broadcastEvent('provider_update', {
+            action: 'create_group',
+            providerType,
+            providerConfig: null,
+            timestamp: new Date().toISOString()
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            success: true,
+            message: 'Provider group created successfully',
+            providerType,
+            providerCount: 0
+        }));
+        return true;
+    } catch (error) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: error.message } }));
+        return true;
+    }
+}
+
+/**
+ * 删除提供商分组
+ */
+export async function handleDeleteProviderGroup(req, res, currentConfig, providerPoolManager, providerType) {
+    return withFileLock(() => _handleDeleteProviderGroup(req, res, currentConfig, providerPoolManager, providerType)).catch(err => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'File operation failed: ' + err.message } }));
+        return true;
+    });
+}
+
+async function _handleDeleteProviderGroup(req, res, currentConfig, providerPoolManager, providerType) {
+    try {
+        const filePath = currentConfig.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
+        let providerPools = {};
+
+        if (existsSync(filePath)) {
+            try {
+                const fileContent = readFileSync(filePath, 'utf-8');
+                providerPools = JSON.parse(fileContent);
+            } catch (readError) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: { message: 'Provider pools file not found' } }));
+                return true;
+            }
+        }
+
+        if (!Object.prototype.hasOwnProperty.call(providerPools, providerType)) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: 'Provider group not found' } }));
+            return true;
+        }
+
+        const deletedProviders = Array.isArray(providerPools[providerType]) ? providerPools[providerType] : [];
+        delete providerPools[providerType];
+
+        writeFileSync(filePath, JSON.stringify(providerPools, null, 2), 'utf-8');
+        logger.info(`[UI API] Deleted provider group ${providerType}, removed ${deletedProviders.length} providers`);
+
+        if (providerPoolManager) {
+            providerPoolManager.providerPools = providerPools;
+            providerPoolManager.initializeProviderStatus();
+        }
+
+        broadcastEvent('config_update', {
+            action: 'delete_group',
+            filePath,
+            providerType,
+            deletedCount: deletedProviders.length,
+            timestamp: new Date().toISOString()
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            success: true,
+            message: 'Provider group deleted successfully',
+            providerType,
+            deletedCount: deletedProviders.length
+        }));
+        return true;
+    } catch (error) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: error.message } }));
+        return true;
+    }
+}
+
 export async function handleDisableEnableProvider(req, res, currentConfig, providerPoolManager, providerType, providerUuid, action) {
     return withFileLock(() => _handleDisableEnableProvider(req, res, currentConfig, providerPoolManager, providerType, providerUuid, action)).catch(err => {
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -1144,25 +1296,17 @@ export async function handleHealthCheck(req, res, currentConfig, providerPoolMan
             
             // 跳过已禁用的节点
             if (providerConfig.isDisabled) {
-                logger.info(`[UI API] Skipping health check for disabled provider: ${providerConfig.uuid}`);
+                const warningMessage = 'Health check warning: provider disabled, marked as unhealthy';
+                providerPoolManager.markProviderUnhealthyImmediately(providerType, providerConfig, warningMessage);
+                providerStatus.config.lastHealthCheckTime = new Date().toISOString();
+                logger.warn(`[UI API] ${warningMessage} (${providerConfig.uuid})`);
                 results.push({
                     uuid: providerConfig.uuid,
-                    success: null,
-                    healthy: providerConfig.isHealthy,
+                    success: false,
+                    healthy: false,
                     reason: 'disabled',
-                    message: 'Skipped: provider disabled'
-                });
-                continue;
-            }
-
-            // 兼容旧配置：checkHealth=false 时，在批量检测中返回 skipped
-            if (providerConfig.checkHealth === false) {
-                results.push({
-                    uuid: providerConfig.uuid,
-                    success: null,
-                    healthy: providerConfig.isHealthy,
-                    reason: 'checkHealthDisabled',
-                    message: 'Skipped: checkHealth disabled'
+                    message: warningMessage,
+                    isWarning: true
                 });
                 continue;
             }
@@ -1238,7 +1382,23 @@ export async function handleSingleProviderHealthCheck(req, res, currentConfig, p
 
         logger.info(`[UI API] Starting single health check for provider ${providerUuid} in ${providerType}`);
 
-        const result = await runProviderHealthCheck(providerPoolManager, providerType, providerStatus);
+        let result;
+        if (providerStatus.config.isDisabled) {
+            const warningMessage = 'Health check warning: provider disabled, marked as unhealthy';
+            providerPoolManager.markProviderUnhealthyImmediately(providerType, providerStatus.config, warningMessage);
+            providerStatus.config.lastHealthCheckTime = new Date().toISOString();
+            result = {
+                uuid: providerUuid,
+                success: false,
+                healthy: false,
+                reason: 'disabled',
+                message: warningMessage,
+                isWarning: true,
+                isAuthError: false
+            };
+        } else {
+            result = await runProviderHealthCheck(providerPoolManager, providerType, providerStatus);
+        }
 
         // 使用文件锁进行持久化，防止并发写入冲突
         const filePath = await withFileLock(async () => {
@@ -1265,7 +1425,9 @@ export async function handleSingleProviderHealthCheck(req, res, currentConfig, p
             healthy: result.healthy,
             modelName: result.modelName || null,
             message: result.message,
-            isAuthError: result.isAuthError || false
+            isAuthError: result.isAuthError || false,
+            isWarning: result.isWarning || false,
+            reason: result.reason || null
         }));
         return true;
     } catch (error) {

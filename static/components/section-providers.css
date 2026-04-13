@@ -60,10 +60,10 @@
 }
 
 .providers-list {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1rem;
-    align-items: start;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    align-items: stretch;
 }
 
 /* 模态框中的提供商列表 */
@@ -76,9 +76,15 @@
 .provider-item {
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
-    padding: 1.5rem;
+    padding: 0.875rem 1rem;
     transition: var(--transition);
     background: var(--bg-secondary);
+}
+
+.provider-item.provider-subgroup-item {
+    margin-left: 24px;
+    border-style: dashed;
+    background: var(--bg-primary);
 }
 
 .provider-item:hover {
@@ -91,19 +97,155 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1rem;
+    margin-bottom: 0.5rem;
+    gap: 0.75rem;
+}
+
+.provider-main-inline {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
 }
 
 .provider-name {
     font-size: 1.125rem;
     font-weight: 600;
     color: var(--text-primary);
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.provider-subgroup-prefix {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 0.375rem;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    transform: rotate(180deg);
+}
+
+.provider-item.provider-subgroup-item .provider-name {
+    font-size: 1rem;
 }
 
 .provider-header-right {
     display: flex;
     align-items: center;
     gap: 0.75rem;
+}
+
+.provider-inline-stats {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+    overflow: hidden;
+}
+
+.provider-name .provider-type-text {
+    display: inline-block;
+    max-width: 260px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+}
+
+.provider-inline-stat {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.125rem 0.45rem;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--bg-primary);
+    white-space: nowrap;
+}
+
+.provider-inline-stat-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.provider-inline-stat-value {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.provider-order-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.provider-current-route-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-left: 0.25rem;
+    min-width: 0;
+}
+
+.provider-current-route-inline-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.provider-current-route-inline-value {
+    font-size: 12px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 340px;
+}
+
+.provider-current-route-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--bg-primary);
+    max-width: 360px;
+}
+
+.provider-current-route-pill span {
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.provider-order-btn {
+    width: 26px;
+    height: 26px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.provider-order-btn:hover:not(:disabled) {
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.provider-order-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
 .provider-status {
@@ -284,9 +426,9 @@
 
 .provider-stats {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 1rem;
-    margin-top: 1rem;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin-top: 0;
 }
 
 .provider-stat {
@@ -304,6 +446,16 @@
     font-size: 1.125rem;
     font-weight: 600;
     color: var(--text-primary);
+}
+
+@media (max-width: 1200px) {
+    .provider-stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .provider-item.provider-subgroup-item {
+        margin-left: 12px;
+    }
 }
 
 .protocol-content.active {
@@ -736,6 +888,76 @@
     display: flex;
     gap: 8px;
     align-items: center;
+}
+
+/* 提供商池列表：紧凑单行展示 */
+.provider-list .provider-item-detail {
+    margin-bottom: 10px;
+}
+
+.provider-list .provider-item-header {
+    padding: 12px 16px;
+    min-height: 58px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+}
+
+.provider-list .provider-info {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.provider-list .provider-name {
+    margin-bottom: 0;
+    min-width: 0;
+    max-width: 280px;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.provider-list .provider-meta {
+    margin: 0;
+    min-width: 0;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.provider-list .provider-remark-summary,
+.provider-list .provider-health-meta,
+.provider-list .provider-error-info {
+    display: none;
+}
+
+.provider-list .provider-actions-group {
+    gap: 6px;
+    flex-wrap: nowrap;
+}
+
+.provider-list .provider-actions-group .btn-small {
+    min-height: 30px;
+    padding: 0 10px;
+    font-size: 12px;
+}
+
+@media (max-width: 1280px) {
+    .provider-list .provider-actions-group .btn-small {
+        width: 30px;
+        min-width: 30px;
+        padding: 0;
+        justify-content: center;
+    }
+
+    .provider-list .provider-actions-group .btn-small span {
+        display: none;
+    }
 }
 
 .btn-edit {
@@ -1648,6 +1870,27 @@
 .add-group-btn:hover {
     background: #10b981;
     color: white;
+    transform: translateY(-1px);
+}
+
+.delete-group-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.75rem;
+    background: #fef2f2;
+    color: #b91c1c;
+    border: none;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.delete-group-btn:hover {
+    background: #ef4444;
+    color: #fff;
     transform: translateY(-1px);
 }
 
