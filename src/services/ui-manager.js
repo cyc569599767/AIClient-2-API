@@ -192,6 +192,14 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
         return await providerApi.handleDeleteUnhealthyProviders(req, res, currentConfig, providerPoolManager, providerType);
     }
 
+    // Disable all providers for a specific group (current group only, no child groups)
+    // NOTE: This must be before the generic /{providerType}/{uuid} route to avoid matching 'disable-all' as UUID
+    const disableAllMatch = pathParam.match(/^\/api\/providers\/([^\/]+)\/disable-all$/);
+    if (method === 'POST' && disableAllMatch) {
+        const providerType = decodeURIComponent(disableAllMatch[1]);
+        return await providerApi.handleDisableAllProviders(req, res, currentConfig, providerPoolManager, providerType);
+    }
+
     // Refresh UUIDs for all unhealthy providers of a specific type
     // NOTE: This must be before the generic /{providerType}/{uuid} route to avoid matching 'refresh-unhealthy-uuids' as UUID
     const refreshUnhealthyUuidsMatch = pathParam.match(/^\/api\/providers\/([^\/]+)\/refresh-unhealthy-uuids$/);

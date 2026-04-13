@@ -973,7 +973,55 @@ export class ProviderPoolManager {
                 Array.isArray(this.providerStatus[type]) &&
                 this.providerStatus[type].length > 0
             )
-            .sort((a, b) => a.localeCompare(b));
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    }
+
+    /**
+     * Checks whether a provider type currently has available nodes that can potentially serve the requested model.
+     * Rules align with selectProvider():
+     * - configured supportedModels has highest priority
+     * - otherwise, notSupportedModels excludes specific models
+     * - if neither configured, it is treated as potentially supported
+     * @private
+     * @param {string} providerType
+     * @param {string|null} requestedModel
+     * @returns {boolean}
+     */
+    _hasAvailableProviderForModel(providerType, requestedModel = null) {
+        if (!requestedModel) {
+            return true;
+        }
+
+        const providers = this.providerStatus[providerType] || [];
+        if (!Array.isArray(providers) || providers.length === 0) {
+            return false;
+        }
+
+        const availableProviders = providers.filter(p =>
+            p?.config?.isHealthy && !p.config.isDisabled && !p.config.needsRefresh
+        );
+        if (availableProviders.length === 0) {
+            return false;
+        }
+
+        return availableProviders.some(p => {
+            const providerConfig = p.config || {};
+            const supportedModels = getConfiguredSupportedModels(providerType, providerConfig);
+            if (supportedModels.length > 0) {
+                if (supportedModels.includes(requestedModel)) {
+                    return true;
+                }
+
+                const mappedModel = getMappedModel(providerConfig, requestedModel);
+                return mappedModel ? supportedModels.includes(mappedModel) : false;
+            }
+
+            if (Array.isArray(providerConfig.notSupportedModels) && providerConfig.notSupportedModels.includes(requestedModel)) {
+                return false;
+            }
+
+            return true;
+        });
     }
 
     /**
@@ -988,7 +1036,7 @@ export class ProviderPoolManager {
         const triedTypes = new Set();
         const typesToTry = [providerType];
 
-        // Always try child groups first (same provider family)
+        // Try parent first, then child groups in sorted order (same provider family)
         const childTypes = this._getChildProviderTypes(providerType);
         if (childTypes.length > 0) {
             typesToTry.push(...childTypes);
@@ -1014,9 +1062,7 @@ export class ProviderPoolManager {
                 const primaryProtocol = getProtocolPrefix(providerType);
                 const fallbackProtocol = getProtocolPrefix(currentType);
                 if (primaryProtocol !== fallbackProtocol) continue;
-
-                const supportedModels = getProviderModels(currentType);
-                if (supportedModels.length > 0 && !supportedModels.includes(requestedModel)) continue;
+                if (!this._hasAvailableProviderForModel(currentType, requestedModel)) continue;
             }
 
             // 尝试获取插槽
@@ -1072,8 +1118,7 @@ export class ProviderPoolManager {
                              const fallbackProtocol = getProtocolPrefix(fallbackType);
                              if (targetProtocol !== fallbackProtocol) continue;
                              
-                             const supportedModels = getProviderModels(fallbackType);
-                             if (supportedModels.length > 0 && !supportedModels.includes(targetModel)) continue;
+                             if (!this._hasAvailableProviderForModel(fallbackType, targetModel)) continue;
                              
                              try {
                                 const fallbackSelectedConfig = await this.acquireSlot(fallbackType, targetModel, options);
@@ -1133,7 +1178,7 @@ export class ProviderPoolManager {
         const triedTypes = new Set();
         const typesToTry = [providerType];
 
-        // Always try child groups first (same provider family)
+        // Try parent first, then child groups in sorted order (same provider family)
         const childTypes = this._getChildProviderTypes(providerType);
         if (childTypes.length > 0) {
             typesToTry.push(...childTypes);
@@ -1171,9 +1216,8 @@ export class ProviderPoolManager {
                     continue;
                 }
 
-                // 检查 fallback 类型是否支持请求的模型
-                const supportedModels = getProviderModels(currentType);
-                if (supportedModels.length > 0 && !supportedModels.includes(requestedModel)) {
+                // 检查 fallback 类型在当前可用节点中是否可能支持请求模型
+                if (!this._hasAvailableProviderForModel(currentType, requestedModel)) {
                     this._log('debug', `Skipping fallback type ${currentType}: model ${requestedModel} not supported`);
                     continue;
                 }
@@ -1242,8 +1286,7 @@ export class ProviderPoolManager {
                              if (targetProtocol !== fallbackProtocol) continue;
                              
                              // 检查模型支持
-                             const supportedModels = getProviderModels(fallbackType);
-                             if (supportedModels.length > 0 && !supportedModels.includes(targetModel)) continue;
+                             if (!this._hasAvailableProviderForModel(fallbackType, targetModel)) continue;
                              
                              const fallbackSelectedConfig = await this.selectProvider(fallbackType, targetModel, options);
                              if (fallbackSelectedConfig) {

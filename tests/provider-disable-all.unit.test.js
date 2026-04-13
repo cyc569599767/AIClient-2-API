@@ -10,10 +10,10 @@ jest.mock('../src/providers/adapter.js', () => ({
     serviceInstances: {}
 }));
 
-let handleDeleteProvider;
+let handleDisableAllProviders;
 
 beforeAll(async () => {
-    ({ handleDeleteProvider } = await import('../src/ui-modules/provider-api.js'));
+    ({ handleDisableAllProviders } = await import('../src/ui-modules/provider-api.js'));
 });
 
 function createMockRes() {
@@ -38,69 +38,80 @@ function createTempFilePath() {
     }
     return path.join(
         tempDir,
-        `provider_pools.delete-subgroup.test.${Date.now()}.${Math.random().toString(16).slice(2)}.json`
+        `provider_pools.disable-all.test.${Date.now()}.${Math.random().toString(16).slice(2)}.json`
     );
 }
 
-describe('delete provider subgroup behavior', () => {
-    test('keeps custom child group when last provider is removed', async () => {
+function safeUnlink(filePath) {
+    if (fs.existsSync(filePath)) {
+        try {
+            fs.unlinkSync(filePath);
+        } catch {}
+    }
+}
+
+describe('disable all providers in group', () => {
+    test('disables only current group providers and keeps child group unchanged', async () => {
         const tempFilePath = createTempFilePath();
-        const providerType = 'openai-custom-prod';
         fs.writeFileSync(tempFilePath, JSON.stringify({
-            [providerType]: [{ uuid: 'child-node-1', customName: 'node1' }]
+            'openai-custom': [
+                { uuid: 'parent-1', customName: 'parent1', isDisabled: false },
+                { uuid: 'parent-2', customName: 'parent2', isDisabled: true }
+            ],
+            'openai-custom-prod': [
+                { uuid: 'child-1', customName: 'child1', isDisabled: false }
+            ]
         }, null, 2), 'utf-8');
 
+        const providerPoolManager = {
+            providerPools: {},
+            initializeProviderStatus: jest.fn()
+        };
         const res = createMockRes();
-        await handleDeleteProvider(
+
+        await handleDisableAllProviders(
             {},
             res,
             { PROVIDER_POOLS_FILE_PATH: tempFilePath },
-            { providerPools: {}, initializeProviderStatus: jest.fn() },
-            providerType,
-            'child-node-1'
+            providerPoolManager,
+            'openai-custom'
         );
 
         const payload = JSON.parse(res.body);
         const saved = JSON.parse(fs.readFileSync(tempFilePath, 'utf-8'));
+
         expect(res.statusCode).toBe(200);
         expect(payload.success).toBe(true);
-        expect(saved).toHaveProperty(providerType);
-        expect(saved[providerType]).toEqual([]);
+        expect(payload.disabledCount).toBe(1);
+        expect(saved['openai-custom'].every(provider => provider.isDisabled === true)).toBe(true);
+        expect(saved['openai-custom-prod'][0].isDisabled).toBe(false);
+        expect(providerPoolManager.initializeProviderStatus).toHaveBeenCalled();
 
-        if (fs.existsSync(tempFilePath)) {
-            try {
-                fs.unlinkSync(tempFilePath);
-            } catch {}
-        }
+        safeUnlink(tempFilePath);
     });
 
-    test('still removes base group when last provider is removed', async () => {
+    test('returns 404 when provider group does not exist', async () => {
         const tempFilePath = createTempFilePath();
-        const providerType = 'openai-custom';
         fs.writeFileSync(tempFilePath, JSON.stringify({
-            [providerType]: [{ uuid: 'base-node-1', customName: 'node1' }]
+            'openai-custom-prod': [
+                { uuid: 'child-1', customName: 'child1', isDisabled: false }
+            ]
         }, null, 2), 'utf-8');
 
         const res = createMockRes();
-        await handleDeleteProvider(
+
+        await handleDisableAllProviders(
             {},
             res,
             { PROVIDER_POOLS_FILE_PATH: tempFilePath },
             { providerPools: {}, initializeProviderStatus: jest.fn() },
-            providerType,
-            'base-node-1'
+            'openai-custom'
         );
 
         const payload = JSON.parse(res.body);
-        const saved = JSON.parse(fs.readFileSync(tempFilePath, 'utf-8'));
-        expect(res.statusCode).toBe(200);
-        expect(payload.success).toBe(true);
-        expect(saved[providerType]).toBeUndefined();
+        expect(res.statusCode).toBe(404);
+        expect(payload.error.message).toContain('Provider group not found');
 
-        if (fs.existsSync(tempFilePath)) {
-            try {
-                fs.unlinkSync(tempFilePath);
-            } catch {}
-        }
+        safeUnlink(tempFilePath);
     });
 });

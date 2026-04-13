@@ -869,8 +869,8 @@ function showProviderManagerModal(data) {
                         <button class="btn btn-secondary" onclick="window.refreshUnhealthyUuids('${providerType}')" data-i18n="modal.provider.refreshUnhealthyUuids" title="刷新不健康节点的UUID">
                             <i class="fas fa-sync-alt"></i> <span data-i18n="modal.provider.refreshUnhealthyUuidsBtn">刷新UUID</span>
                         </button>
-                        <button class="btn btn-danger" onclick="window.deleteUnhealthyProviders('${providerType}')" data-i18n="modal.provider.deleteUnhealthy" title="删除不健康节点">
-                            <i class="fas fa-trash-alt"></i> <span data-i18n="modal.provider.deleteUnhealthyBtn">删除不健康</span>
+                        <button class="btn btn-warning" onclick="window.disableAllProvidersInGroup('${providerType}')" data-i18n="modal.provider.disableAll" title="一键禁用当前分组">
+                            <i class="fas fa-ban"></i> <span data-i18n="modal.provider.disableAllBtn">一键禁用</span>
                         </button>
                     </div>
                 </div>
@@ -2590,54 +2590,54 @@ async function refreshProviderUuid(uuid, event) {
 }
 
 /**
- * 删除所有不健康的提供商节点
+ * 一键禁用当前分组下所有提供商（仅作用于当前分组，不影响子分组）
  * @param {string} providerType - 提供商类型
  */
-async function deleteUnhealthyProviders(providerType) {
-    // 先获取不健康节点数量
-    const unhealthyCount = currentProviders.filter(p => !p.isHealthy).length;
-    
-    if (unhealthyCount === 0) {
-        showToast(t('common.info'), t('modal.provider.deleteUnhealthy.noUnhealthy'), 'info');
+async function disableAllProvidersInGroup(providerType) {
+    const enabledCount = currentProviders.filter(p => !p.isDisabled).length;
+
+    if (enabledCount === 0) {
+        showToast(t('common.info'), t('modal.provider.disableAll.noProviders'), 'info');
         return;
     }
-    
+
     const confirmed = await showConfirmModal({
-        title: t('modal.provider.deleteUnhealthy'),
-        message: t('modal.provider.deleteUnhealthyConfirm', { type: providerType, count: unhealthyCount }),
-        confirmText: t('modal.provider.deleteUnhealthy'),
-        confirmButtonClass: 'btn-danger',
-        iconClass: 'fas fa-trash-alt'
+        title: t('modal.provider.disableAll'),
+        message: t('modal.provider.disableAllConfirm', { type: providerType, count: enabledCount }),
+        confirmText: t('modal.provider.disableAll'),
+        confirmButtonClass: 'btn-warning',
+        iconClass: 'fas fa-ban'
     });
     if (!confirmed) {
         return;
     }
-    
+
     try {
-        showToast(t('common.info'), t('modal.provider.deleteUnhealthy.deleting'), 'info');
-        
-        const response = await window.apiClient.delete(
-            `/providers/${encodeURIComponent(providerType)}/delete-unhealthy`
+        showToast(t('common.info'), t('modal.provider.disableAll.disabling'), 'info');
+
+        const response = await window.apiClient.post(
+            `/providers/${encodeURIComponent(providerType)}/disable-all`,
+            {}
         );
-        
+
         if (response.success) {
             showToast(
                 t('common.success'),
-                t('modal.provider.deleteUnhealthy.success', { count: response.deletedCount }),
+                t('modal.provider.disableAll.success', { count: response.disabledCount }),
                 'success'
             );
-            
+
             // 重新加载配置
             await window.apiClient.post('/reload-config');
-            
+
             // 刷新提供商配置显示
             await refreshProviderConfig(providerType);
         } else {
-            showToast(t('common.error'), t('modal.provider.deleteUnhealthy.failed'), 'error');
+            showToast(t('common.error'), t('modal.provider.disableAll.failed'), 'error');
         }
     } catch (error) {
-        console.error('删除不健康节点失败:', error);
-        showToast(t('common.error'), t('modal.provider.deleteUnhealthy.failed') + ': ' + error.message, 'error');
+        console.error('一键禁用分组失败:', error);
+        showToast(t('common.error'), t('modal.provider.disableAll.failed') + ': ' + error.message, 'error');
     }
 }
 
@@ -2744,7 +2744,7 @@ export {
     toggleProviderStatus,
     resetAllProvidersHealth,
     performHealthCheck,
-    deleteUnhealthyProviders,
+    disableAllProvidersInGroup,
     refreshUnhealthyUuids,
     openSupportedModelsPicker,
     loadModelsForProviderType,
@@ -2767,7 +2767,7 @@ window.toggleProviderStatus = toggleProviderStatus;
 window.resetAllProvidersHealth = resetAllProvidersHealth;
 window.performHealthCheck = performHealthCheck;
 window.performSingleHealthCheck = performSingleHealthCheck;
-window.deleteUnhealthyProviders = deleteUnhealthyProviders;
+window.disableAllProvidersInGroup = disableAllProvidersInGroup;
 window.refreshUnhealthyUuids = refreshUnhealthyUuids;
 window.openSupportedModelsPicker = openSupportedModelsPicker;
 window.goToProviderPage = goToProviderPage;
