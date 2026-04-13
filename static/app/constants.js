@@ -32,7 +32,7 @@ const elements = {
 
 // 定期刷新间隔
 const REFRESH_INTERVALS = {
-    SYSTEM_INFO: 10000
+    SYSTEM_INFO: 5000
 };
 
 // 导出所有常量
