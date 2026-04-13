@@ -1,6 +1,6 @@
 // 模态框管理模块
 
-import { escapeHtml, showToast, getFieldLabel, getProviderTypeFields } from './utils.js';
+import { escapeHtml, showToast, showConfirmModal, getFieldLabel, getProviderTypeFields } from './utils.js';
 import { handleProviderPasswordToggle } from './event-handlers.js';
 import { t } from './i18n.js';
 
@@ -11,6 +11,106 @@ const PROVIDERS_PER_PAGE = 5;
 let currentPage = 1;
 let currentProviders = [];
 let currentProviderType = '';
+const PROVIDER_SECRET_DISPLAY_MODE_MASKED = 'masked';
+
+function isSensitiveConfigKey(fieldKey = '', fieldDef = {}) {
+    if (fieldDef?.type === 'password') {
+        return true;
+    }
+
+    const normalizedKey = String(fieldKey || '').toLowerCase();
+    const mayBeFileOrUrl = normalizedKey.includes('url') || normalizedKey.includes('path');
+    if (mayBeFileOrUrl) {
+        return false;
+    }
+
+    const sensitiveKeywords = [
+        'apikey',
+        'api_key',
+        'key',
+        'password',
+        'token',
+        'secret',
+        'cookie',
+        'sso',
+        'credential',
+        'creds'
+    ];
+
+    return sensitiveKeywords.some(keyword => normalizedKey.includes(keyword));
+}
+
+function maskProviderSensitiveValue(rawValue) {
+    const value = String(rawValue || '');
+    if (!value) {
+        return '';
+    }
+
+    if (value.length <= 4) {
+        return '*'.repeat(value.length);
+    }
+
+    if (value.length <= 8) {
+        const prefix = value.slice(0, 2);
+        const suffix = value.slice(-1);
+        return `${prefix}${'*'.repeat(Math.max(value.length - 3, 1))}${suffix}`;
+    }
+
+    const prefix = value.slice(0, 4);
+    const suffix = value.slice(-4);
+    const maskedLength = Math.max(value.length - 8, 4);
+    return `${prefix}${'*'.repeat(maskedLength)}${suffix}`;
+}
+
+function getProviderSensitiveActualValue(input) {
+    if (!input) {
+        return '';
+    }
+
+    if (input.dataset.displayMode === PROVIDER_SECRET_DISPLAY_MODE_MASKED) {
+        return input.dataset.realValue || input.dataset.configValue || '';
+    }
+
+    return input.value || '';
+}
+
+function setProviderSensitiveMaskedValue(input, rawValue = '') {
+    if (!input) {
+        return;
+    }
+
+    const realValue = String(rawValue || '');
+    input.type = 'text';
+    input.readOnly = true;
+    input.dataset.sensitive = 'true';
+    input.dataset.displayMode = PROVIDER_SECRET_DISPLAY_MODE_MASKED;
+    input.dataset.realValue = realValue;
+    input.value = maskProviderSensitiveValue(realValue);
+
+    const icon = input.parentElement?.querySelector('.password-toggle i');
+    if (icon) {
+        icon.className = 'fas fa-eye';
+    }
+}
+
+function setProviderSensitiveFullValue(input, rawValue = '', editable = false) {
+    if (!input) {
+        return;
+    }
+
+    const realValue = String(rawValue || '');
+    input.type = 'text';
+    input.readOnly = !editable;
+    input.dataset.sensitive = 'true';
+    input.dataset.displayMode = 'full';
+    input.dataset.realValue = realValue;
+    input.value = realValue;
+
+    const icon = input.parentElement?.querySelector('.password-toggle i');
+    if (icon) {
+        icon.className = 'fas fa-eye-slash';
+    }
+}
 
 function usesManagedModelList(providerType = '') {
     return Array.from(MANAGED_MODEL_LIST_PROVIDERS).some(baseType =>
@@ -342,7 +442,9 @@ function collectDraftProviderConfig(providerDetail, providerType, uuid) {
 
     configInputs.forEach(input => {
         const key = input.dataset.configKey;
-        let value = input.value;
+        let value = input.dataset.sensitive === 'true'
+            ? getProviderSensitiveActualValue(input)
+            : input.value;
         if (key === 'concurrencyLimit' || key === 'queueLimit') {
             value = parseInt(value || '0', 10);
         }
@@ -1245,21 +1347,26 @@ function renderProviderConfig(provider) {
         const field1Key = otherFields[i];
         const field1Label = getFieldLabel(field1Key);
         const field1Value = provider[field1Key];
-        const field1IsPassword = field1Key.toLowerCase().includes('key') || field1Key.toLowerCase().includes('password');
-        const field1IsOAuthFilePath = field1Key.includes('OAUTH_CREDS_FILE_PATH');
-        const field1DisplayValue = field1IsPassword && field1Value ? '••••••••' : ((field1Value !== undefined && field1Value !== null) ? field1Value : '');
         const field1Def = fieldConfigs.find(f => f.id === field1Key) || fieldConfigs.find(f => f.id.toUpperCase() === field1Key.toUpperCase()) || {};
+        const field1IsPassword = isSensitiveConfigKey(field1Key, field1Def);
+        const field1IsOAuthFilePath = field1Key.includes('OAUTH_CREDS_FILE_PATH');
+        const field1ActualValue = (field1Value !== undefined && field1Value !== null) ? String(field1Value) : '';
+        const field1DisplayValue = field1IsPassword ? maskProviderSensitiveValue(field1ActualValue) : field1ActualValue;
         
         if (field1IsPassword) {
             html += `
                 <div class="config-item">
                     <label>${field1Label}</label>
                     <div class="password-input-wrapper">
-                        <input type="password"
-                               value="${field1DisplayValue}"
+                        <input type="text"
+                               value="${escapeHtml(field1DisplayValue)}"
                                readonly
+                               data-sensitive="true"
+                               data-display-mode="masked"
+                               data-is-editing="false"
+                               data-real-value="${escapeHtml(field1ActualValue)}"
                                data-config-key="${field1Key}"
-                               data-config-value="${(field1Value !== undefined && field1Value !== null) ? field1Value : ''}"
+                               data-config-value="${escapeHtml(field1ActualValue)}"
                                placeholder="${field1Def.placeholder || ''}">
                        <button type="button" class="password-toggle" data-target="${field1Key}">
                             <i class="fas fa-eye"></i>
@@ -1307,21 +1414,26 @@ function renderProviderConfig(provider) {
             const field2Key = otherFields[i + 1];
             const field2Label = getFieldLabel(field2Key);
             const field2Value = provider[field2Key];
-            const field2IsPassword = field2Key.toLowerCase().includes('key') || field2Key.toLowerCase().includes('password');
-            const field2IsOAuthFilePath = field2Key.includes('OAUTH_CREDS_FILE_PATH');
-            const field2DisplayValue = field2IsPassword && field2Value ? '••••••••' : ((field2Value !== undefined && field2Value !== null) ? field2Value : '');
             const field2Def = fieldConfigs.find(f => f.id === field2Key) || fieldConfigs.find(f => f.id.toUpperCase() === field2Key.toUpperCase()) || {};
+            const field2IsPassword = isSensitiveConfigKey(field2Key, field2Def);
+            const field2IsOAuthFilePath = field2Key.includes('OAUTH_CREDS_FILE_PATH');
+            const field2ActualValue = (field2Value !== undefined && field2Value !== null) ? String(field2Value) : '';
+            const field2DisplayValue = field2IsPassword ? maskProviderSensitiveValue(field2ActualValue) : field2ActualValue;
             
             if (field2IsPassword) {
                 html += `
                     <div class="config-item">
                         <label>${field2Label}</label>
                         <div class="password-input-wrapper">
-                            <input type="password"
-                                   value="${field2DisplayValue}"
+                            <input type="text"
+                                   value="${escapeHtml(field2DisplayValue)}"
                                    readonly
+                                   data-sensitive="true"
+                                   data-display-mode="masked"
+                                   data-is-editing="false"
+                                   data-real-value="${escapeHtml(field2ActualValue)}"
                                    data-config-key="${field2Key}"
-                                   data-config-value="${(field2Value !== undefined && field2Value !== null) ? field2Value : ''}"
+                                   data-config-value="${escapeHtml(field2ActualValue)}"
                                    placeholder="${field2Def.placeholder || ''}">
                             <button type="button" class="password-toggle" data-target="${field2Key}">
                                 <i class="fas fa-eye"></i>
@@ -1484,6 +1596,10 @@ function editProvider(uuid, event) {
     event.stopPropagation();
     
     const providerDetail = event.target.closest('.provider-item-detail');
+    if (!providerDetail) {
+        return;
+    }
+
     const configInputs = providerDetail.querySelectorAll('input[data-config-key]');
     const configSelects = providerDetail.querySelectorAll('select[data-config-key]');
     const content = providerDetail.querySelector(`#content-${uuid}`);
@@ -1497,10 +1613,12 @@ function editProvider(uuid, event) {
     setTimeout(() => {
         // 切换输入框为可编辑状态
         configInputs.forEach(input => {
-            input.readOnly = false;
-            if (input.type === 'password') {
-                const actualValue = input.dataset.configValue;
-                input.value = actualValue;
+            const isSensitiveField = input.dataset.sensitive === 'true';
+            if (isSensitiveField) {
+                input.dataset.isEditing = 'true';
+                setProviderSensitiveMaskedValue(input, input.dataset.configValue || '');
+            } else {
+                input.readOnly = false;
             }
         });
         
@@ -1552,17 +1670,22 @@ function cancelEdit(uuid, event) {
     event.stopPropagation();
     
     const providerDetail = event.target.closest('.provider-item-detail');
+    if (!providerDetail) {
+        return;
+    }
+
     const configInputs = providerDetail.querySelectorAll('input[data-config-key]');
     const configSelects = providerDetail.querySelectorAll('select[data-config-key]');
     
     // 恢复输入框为只读状态
     configInputs.forEach(input => {
-        input.readOnly = true;
-        const originalValue = input.dataset.configValue;
-        // 恢复原始值
-        if (input.type === 'password') {
-            input.value = originalValue ? '••••••••' : '';
+        const isSensitiveField = input.dataset.sensitive === 'true';
+        const originalValue = input.dataset.configValue || '';
+        if (isSensitiveField) {
+            input.dataset.isEditing = 'false';
+            setProviderSensitiveMaskedValue(input, originalValue);
         } else {
+            input.readOnly = true;
             input.value = originalValue || '';
         }
     });
@@ -1668,7 +1791,14 @@ async function saveProvider(uuid, event) {
 async function deleteProvider(uuid, event) {
     event.stopPropagation();
     
-    if (!confirm(t('modal.provider.deleteConfirm'))) {
+    const confirmed = await showConfirmModal({
+        title: t('modal.provider.delete'),
+        message: t('modal.provider.deleteConfirm'),
+        confirmText: t('modal.provider.delete'),
+        confirmButtonClass: 'btn-danger',
+        iconClass: 'fas fa-trash-alt'
+    });
+    if (!confirmed) {
         return;
     }
     
@@ -1827,8 +1957,8 @@ function showAddProviderForm(providerType) {
             <div class="form-group">
                 <label data-i18n="modal.provider.healthCheckLabel">健康检查</label>
                 <select id="newCheckHealth">
-                    <option value="false" data-i18n="modal.provider.disabled">禁用</option>
                     <option value="true" data-i18n="modal.provider.enabled">启用</option>
+                    <option value="false" data-i18n="modal.provider.disabled">禁用</option>
                 </select>
             </div>
             <div class="form-group">
@@ -2075,7 +2205,14 @@ async function toggleProviderStatus(uuid, event) {
         t('modal.provider.enableConfirm') :
         t('modal.provider.disableConfirm');
     
-    if (!confirm(confirmMessage)) {
+    const confirmed = await showConfirmModal({
+        title: isCurrentlyDisabled ? t('modal.provider.enabled') : t('modal.provider.disabled'),
+        message: confirmMessage,
+        confirmText: isCurrentlyDisabled ? t('modal.provider.enabled') : t('modal.provider.disabled'),
+        confirmButtonClass: 'btn-primary',
+        iconClass: isCurrentlyDisabled ? 'fas fa-toggle-on' : 'fas fa-toggle-off'
+    });
+    if (!confirmed) {
         return;
     }
     
@@ -2096,7 +2233,14 @@ async function toggleProviderStatus(uuid, event) {
  * @param {string} providerType - 提供商类型
  */
 async function resetAllProvidersHealth(providerType) {
-    if (!confirm(t('modal.provider.resetHealthConfirm', {type: providerType}))) {
+    const confirmed = await showConfirmModal({
+        title: t('modal.provider.resetHealth'),
+        message: t('modal.provider.resetHealthConfirm', { type: providerType }),
+        confirmText: t('modal.provider.resetHealth'),
+        confirmButtonClass: 'btn-primary',
+        iconClass: 'fas fa-heartbeat'
+    });
+    if (!confirmed) {
         return;
     }
     
@@ -2132,9 +2276,9 @@ async function resetAllProvidersHealth(providerType) {
 }
 
 function getHealthCheckResultStatus(result) {
+    if (result?.isWarning === true) return 'failed';
     if (result?.success === true) return 'healthy';
-    if (result?.success === false) return 'failed';
-    return 'skipped';
+    return 'failed';
 }
 
 function getHealthCheckReasonLabel(reason) {
@@ -2155,7 +2299,7 @@ function renderHealthCheckResultRows(results = []) {
     return results.map(result => {
         const status = getHealthCheckResultStatus(result);
         const statusLabel = t(`modal.provider.healthCheck.status.${status}`);
-        const reasonLabel = status === 'skipped'
+        const reasonLabel = result?.reason
             ? getHealthCheckReasonLabel(result.reason || 'other')
             : '-';
         const modelName = result.modelName || '-';
@@ -2185,7 +2329,11 @@ function showHealthCheckReportModal(providerType, results = [], summary = {}) {
         existingOverlay.remove();
     }
 
-    const { successCount = 0, failCount = 0, skippedCount = 0 } = summary;
+    const { successCount = 0, failCount = 0 } = summary;
+    const legacySkippedCount = Array.isArray(results)
+        ? results.filter(item => item && item.success === null).length
+        : 0;
+    const normalizedFailCount = failCount + legacySkippedCount;
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay health-check-report-overlay';
     overlay.style.display = 'flex';
@@ -2204,8 +2352,7 @@ function showHealthCheckReportModal(providerType, results = [], summary = {}) {
                 <div class="health-check-report-summary">
                     ${escapeHtml(t('modal.provider.healthCheck.reportSummary', {
                         success: successCount,
-                        fail: failCount,
-                        skipped: skippedCount
+                        fail: normalizedFailCount
                     }))}
                 </div>
                 <div class="health-check-report-list">
@@ -2247,7 +2394,14 @@ function showHealthCheckReportModal(providerType, results = [], summary = {}) {
  * @param {string} providerType - 提供商类型
  */
 async function performHealthCheck(providerType) {
-    if (!confirm(t('modal.provider.healthCheckConfirm', {type: providerType}))) {
+    const confirmed = await showConfirmModal({
+        title: t('modal.provider.healthCheck'),
+        message: t('modal.provider.healthCheckConfirm', { type: providerType }),
+        confirmText: t('modal.provider.healthCheck'),
+        confirmButtonClass: 'btn-primary',
+        iconClass: 'fas fa-stethoscope'
+    });
+    if (!confirmed) {
         return;
     }
     
@@ -2263,7 +2417,7 @@ async function performHealthCheck(providerType) {
             const { successCount, failCount, skippedCount: skippedCountFromApi, totalCount, results } = response;
             
             // 兼容旧版本后端：优先使用后端返回的 skippedCount，否则前端自行统计
-            const skippedCount = Number.isInteger(skippedCountFromApi)
+            const legacySkippedCount = Number.isInteger(skippedCountFromApi)
                 ? skippedCountFromApi
                 : (results ? results.filter(r => r.success === null).length : 0);
             const skippedByReason = (results || []).reduce((acc, item) => {
@@ -2275,12 +2429,13 @@ async function performHealthCheck(providerType) {
             }, {});
             const skippedDisabledCount = skippedByReason.disabled || 0;
             const skippedCheckHealthCount = skippedByReason.checkHealthDisabled || 0;
-            const skippedOtherCount = Math.max(0, skippedCount - skippedDisabledCount - skippedCheckHealthCount);
+            const skippedOtherCount = Math.max(0, legacySkippedCount - skippedDisabledCount - skippedCheckHealthCount);
+            const normalizedFailCount = failCount + legacySkippedCount;
             
             let message = `${t('modal.provider.healthCheck.complete', { success: successCount })}`;
-            if (failCount > 0) message += t('modal.provider.healthCheck.abnormal', { fail: failCount });
-            if (skippedCount > 0) {
-                message += t('modal.provider.healthCheck.skipped', { skipped: skippedCount });
+            if (normalizedFailCount > 0) message += t('modal.provider.healthCheck.abnormal', { fail: normalizedFailCount });
+            if (legacySkippedCount > 0) {
+                message += t('modal.provider.healthCheck.skipped', { skipped: legacySkippedCount });
                 if (skippedDisabledCount > 0) {
                     message += t('modal.provider.healthCheck.skippedDisabled', { count: skippedDisabledCount });
                 }
@@ -2292,7 +2447,7 @@ async function performHealthCheck(providerType) {
                 }
             }
             
-            showToast(t('common.info'), message, failCount > 0 ? 'warning' : 'success');
+            showToast(t('common.info'), message, normalizedFailCount > 0 ? 'warning' : 'success');
             
             // 重新加载配置
             await window.apiClient.post('/reload-config');
@@ -2345,17 +2500,37 @@ async function performSingleHealthCheck(uuid, event) {
             return;
         }
 
-        const message = response.healthy
-            ? (response.modelName
-                ? t('modal.provider.healthCheckSingleSuccessWithModel', { model: response.modelName })
-                : t('modal.provider.healthCheckSingleSuccess'))
-            : t('modal.provider.healthCheckSingleFailed', { message: response.message || t('common.error') });
+        const fallbackMessage = response.message || t('common.error');
+        const isCheckHealthDisabledWarning = response.reason === 'checkHealthDisabled' || /checkHealth disabled/i.test(fallbackMessage);
+        const isDisabledWarning = response.reason === 'disabled' || /provider disabled/i.test(fallbackMessage);
 
-        showToast(
-            response.healthy ? t('common.success') : t('common.warning'),
-            message,
-            response.healthy ? 'success' : 'warning'
-        );
+        let message;
+        let toastTitle;
+        let toastType;
+
+        if (response.healthy) {
+            message = response.modelName
+                ? t('modal.provider.healthCheckSingleSuccessWithModel', { model: response.modelName })
+                : t('modal.provider.healthCheckSingleSuccess');
+            toastTitle = t('common.success');
+            toastType = 'success';
+        } else if (response.isWarning || isCheckHealthDisabledWarning || isDisabledWarning) {
+            if (isCheckHealthDisabledWarning) {
+                message = t('modal.provider.healthCheckSingleWarningCheckHealthDisabled');
+            } else if (isDisabledWarning) {
+                message = t('modal.provider.healthCheckSingleWarningDisabled');
+            } else {
+                message = t('modal.provider.healthCheckSingleWarning', { message: fallbackMessage });
+            }
+            toastTitle = t('common.warning');
+            toastType = 'warning';
+        } else {
+            message = t('modal.provider.healthCheckSingleFailed', { message: fallbackMessage });
+            toastTitle = t('common.error');
+            toastType = 'error';
+        }
+
+        showToast(toastTitle, message, toastType);
 
         await window.apiClient.post('/reload-config');
         await refreshProviderConfig(providerType);
@@ -2377,7 +2552,14 @@ async function performSingleHealthCheck(uuid, event) {
 async function refreshProviderUuid(uuid, event) {
     event.stopPropagation();
     
-    if (!confirm(t('modal.provider.refreshUuidConfirm', { oldUuid: uuid }))) {
+    const confirmed = await showConfirmModal({
+        title: t('modal.provider.refreshUuid'),
+        message: t('modal.provider.refreshUuidConfirm', { oldUuid: uuid }),
+        confirmText: t('modal.provider.refreshUuid'),
+        confirmButtonClass: 'btn-primary',
+        iconClass: 'fas fa-sync'
+    });
+    if (!confirmed) {
         return;
     }
     
@@ -2420,7 +2602,14 @@ async function deleteUnhealthyProviders(providerType) {
         return;
     }
     
-    if (!confirm(t('modal.provider.deleteUnhealthyConfirm', { type: providerType, count: unhealthyCount }))) {
+    const confirmed = await showConfirmModal({
+        title: t('modal.provider.deleteUnhealthy'),
+        message: t('modal.provider.deleteUnhealthyConfirm', { type: providerType, count: unhealthyCount }),
+        confirmText: t('modal.provider.deleteUnhealthy'),
+        confirmButtonClass: 'btn-danger',
+        iconClass: 'fas fa-trash-alt'
+    });
+    if (!confirmed) {
         return;
     }
     
@@ -2465,7 +2654,14 @@ async function refreshUnhealthyUuids(providerType) {
         return;
     }
     
-    if (!confirm(t('modal.provider.refreshUnhealthyUuidsConfirm', { type: providerType, count: unhealthyCount }))) {
+    const confirmed = await showConfirmModal({
+        title: t('modal.provider.refreshUnhealthyUuids'),
+        message: t('modal.provider.refreshUnhealthyUuidsConfirm', { type: providerType, count: unhealthyCount }),
+        confirmText: t('modal.provider.refreshUnhealthyUuids'),
+        confirmButtonClass: 'btn-primary',
+        iconClass: 'fas fa-sync-alt'
+    });
+    if (!confirmed) {
         return;
     }
     

@@ -177,6 +177,90 @@ function showToast(title, message, type = 'info') {
 }
 
 /**
+ * 显示统一风格确认弹窗
+ * @param {Object} options - 弹窗配置
+ * @param {string} options.title - 标题
+ * @param {string} options.message - 主文案
+ * @param {string} [options.detail] - 补充说明
+ * @param {string} [options.confirmText] - 确认按钮文本
+ * @param {string} [options.cancelText] - 取消按钮文本
+ * @param {string} [options.iconClass] - 标题图标类名
+ * @param {string} [options.confirmButtonClass] - 确认按钮样式类
+ * @returns {Promise<boolean>} 用户是否确认
+ */
+function showConfirmModal(options = {}) {
+    const {
+        title = t('common.confirm'),
+        message = '',
+        detail = '',
+        confirmText = t('common.confirm'),
+        cancelText = t('common.cancel'),
+        iconClass = 'fas fa-circle-question',
+        confirmButtonClass = 'btn-primary'
+    } = options;
+
+    const escapedTitle = escapeHtml(title);
+    const escapedMessage = escapeHtml(message).replace(/\n/g, '<br>');
+    const escapedDetail = escapeHtml(detail).replace(/\n/g, '<br>');
+
+    return new Promise(resolve => {
+        const modal = document.createElement('div');
+        modal.className = 'modal-overlay';
+        modal.style.display = 'flex';
+        modal.style.zIndex = '2500';
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width: 520px;">
+                <div class="modal-header">
+                    <h3><i class="${escapeHtml(iconClass)}"></i> ${escapedTitle}</h3>
+                    <button class="modal-close" type="button" aria-label="${escapeHtml(t('common.close'))}">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p style="margin: 0; color: var(--text-primary); line-height: 1.7;">${escapedMessage}</p>
+                    ${escapedDetail ? `<div style="margin-top: 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-secondary); font-size: 13px; line-height: 1.6;">${escapedDetail}</div>` : ''}
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary modal-cancel" type="button">${escapeHtml(cancelText)}</button>
+                    <button class="btn ${escapeHtml(confirmButtonClass)} modal-confirm" type="button">${escapeHtml(confirmText)}</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+        const closeBtn = modal.querySelector('.modal-close');
+        const cancelBtn = modal.querySelector('.modal-cancel');
+        const confirmBtn = modal.querySelector('.modal-confirm');
+        let settled = false;
+
+        const finish = (confirmed) => {
+            if (settled) return;
+            settled = true;
+            document.removeEventListener('keydown', handleKeydown);
+            modal.remove();
+            resolve(confirmed);
+        };
+
+        const handleKeydown = (event) => {
+            if (event.key === 'Escape') {
+                finish(false);
+            } else if (event.key === 'Enter') {
+                finish(true);
+            }
+        };
+
+        closeBtn?.addEventListener('click', () => finish(false));
+        cancelBtn?.addEventListener('click', () => finish(false));
+        confirmBtn?.addEventListener('click', () => finish(true));
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) {
+                finish(false);
+            }
+        });
+        document.addEventListener('keydown', handleKeydown);
+        confirmBtn?.focus();
+    });
+}
+
+/**
  * 获取字段显示文案
  * @param {string} key - 字段键
  * @returns {string} 显示文案
@@ -504,6 +588,7 @@ export {
     formatUptime,
     escapeHtml,
     showToast,
+    showConfirmModal,
     getFieldLabel,
     getProviderTypeFields,
     getProviderConfigs,

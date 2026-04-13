@@ -1,9 +1,157 @@
 // 事件监听器模块
 
 import { elements, autoScroll, setAutoScroll, clearLogs } from './constants.js';
-import { showToast } from './utils.js';
+import { showToast, showConfirmModal } from './utils.js';
 import { t } from './i18n.js';
 import { checkUpdate, performUpdate } from './provider-manager.js';
+
+const API_KEY_INPUT_ID = 'apiKey';
+const API_KEY_DISPLAY_MODE_MASKED = 'masked';
+const API_KEY_DISPLAY_MODE_FULL = 'full';
+const PROVIDER_SECRET_DISPLAY_MODE_MASKED = 'masked';
+const PROVIDER_SECRET_DISPLAY_MODE_FULL = 'full';
+
+function getApiKeyInput() {
+    return document.getElementById(API_KEY_INPUT_ID);
+}
+
+function getApiKeyToggleButton() {
+    return document.querySelector(`.password-toggle[data-target="${API_KEY_INPUT_ID}"]`);
+}
+
+function maskSensitiveValue(rawValue) {
+    const value = String(rawValue || '');
+    if (!value) {
+        return '';
+    }
+
+    if (value.length <= 4) {
+        return '*'.repeat(value.length);
+    }
+
+    if (value.length <= 8) {
+        const prefix = value.slice(0, 2);
+        const suffix = value.slice(-1);
+        return `${prefix}${'*'.repeat(Math.max(value.length - 3, 1))}${suffix}`;
+    }
+
+    const prefix = value.slice(0, 4);
+    const suffix = value.slice(-4);
+    const maskedLength = Math.max(value.length - 8, 4);
+    return `${prefix}${'*'.repeat(maskedLength)}${suffix}`;
+}
+
+function maskApiKey(apiKey) {
+    return maskSensitiveValue(apiKey);
+}
+
+function setApiKeyDisplayMode(mode = API_KEY_DISPLAY_MODE_MASKED) {
+    const input = getApiKeyInput();
+    if (!input) {
+        return;
+    }
+
+    const button = getApiKeyToggleButton();
+    const icon = button?.querySelector('i');
+    const realValue = String(input.dataset.realValue ?? '');
+
+    if (mode === API_KEY_DISPLAY_MODE_FULL) {
+        input.type = 'text';
+        input.readOnly = false;
+        input.value = realValue;
+        input.dataset.displayMode = API_KEY_DISPLAY_MODE_FULL;
+        if (icon) {
+            icon.className = 'fas fa-eye-slash';
+        }
+        return;
+    }
+
+    input.type = 'text';
+    input.readOnly = true;
+    input.value = maskApiKey(realValue);
+    input.dataset.displayMode = API_KEY_DISPLAY_MODE_MASKED;
+    if (icon) {
+        icon.className = 'fas fa-eye';
+    }
+}
+
+function toggleApiKeyDisplayMode() {
+    const input = getApiKeyInput();
+    if (!input) {
+        return;
+    }
+
+    const currentMode = input.dataset.displayMode || API_KEY_DISPLAY_MODE_MASKED;
+    const nextMode = currentMode === API_KEY_DISPLAY_MODE_MASKED
+        ? API_KEY_DISPLAY_MODE_FULL
+        : API_KEY_DISPLAY_MODE_MASKED;
+
+    if (currentMode === API_KEY_DISPLAY_MODE_FULL) {
+        input.dataset.realValue = input.value || '';
+    }
+
+    setApiKeyDisplayMode(nextMode);
+
+    if (nextMode === API_KEY_DISPLAY_MODE_FULL) {
+        input.focus();
+        const len = input.value.length;
+        input.setSelectionRange(len, len);
+    }
+}
+
+function initApiKeyInputMasking() {
+    const input = getApiKeyInput();
+    if (!input) {
+        return;
+    }
+
+    if (input.dataset.maskListenerAttached !== 'true') {
+        input.dataset.maskListenerAttached = 'true';
+        input.addEventListener('input', () => {
+            if ((input.dataset.displayMode || API_KEY_DISPLAY_MODE_MASKED) === API_KEY_DISPLAY_MODE_FULL) {
+                input.dataset.realValue = input.value || '';
+            }
+        });
+    }
+
+    if ((input.dataset.displayMode || API_KEY_DISPLAY_MODE_MASKED) === API_KEY_DISPLAY_MODE_FULL) {
+        input.dataset.realValue = input.value || '';
+    } else if (typeof input.dataset.realValue !== 'string' || input.dataset.realValue.length === 0) {
+        input.dataset.realValue = input.value || '';
+    }
+
+    setApiKeyDisplayMode(API_KEY_DISPLAY_MODE_MASKED);
+}
+
+function getApiKeyActualValue() {
+    const input = getApiKeyInput();
+    if (!input) {
+        return '';
+    }
+
+    const displayMode = input.dataset.displayMode;
+    if (displayMode === API_KEY_DISPLAY_MODE_MASKED) {
+        return input.dataset.realValue || '';
+    }
+
+    return input.value || '';
+}
+
+function setApiKeyDisplayValue(apiKey, options = {}) {
+    const { preserveMode = false } = options;
+    const input = getApiKeyInput();
+    if (!input) {
+        return;
+    }
+
+    const nextValue = String(apiKey || '');
+    const targetMode = preserveMode
+        ? (input.dataset.displayMode || API_KEY_DISPLAY_MODE_MASKED)
+        : API_KEY_DISPLAY_MODE_MASKED;
+
+    input.dataset.realValue = nextValue;
+    setApiKeyDisplayMode(targetMode);
+}
 
 /**
  * 初始化所有事件监听器
@@ -17,8 +165,14 @@ function initEventListeners() {
     // 清空日志
     if (elements.clearLogsBtn) {
         elements.clearLogsBtn.addEventListener('click', async () => {
-            // 显示确认对话框，明确提示会清空本地日志文件
-            const confirmed = confirm(t('logs.clear.confirm.msg'));
+            // 显示统一确认弹窗，明确提示会清空本地日志文件
+            const confirmed = await showConfirmModal({
+                title: t('logs.clear.confirm.title'),
+                message: t('logs.clear.confirm.msg'),
+                confirmText: t('common.confirm'),
+                confirmButtonClass: 'btn-danger',
+                iconClass: 'fas fa-trash-alt'
+            });
             
             if (!confirmed) {
                 return;
@@ -172,6 +326,7 @@ function initEventListeners() {
     document.querySelectorAll('.password-toggle').forEach(button => {
         button.addEventListener('click', handlePasswordToggle);
     });
+    initApiKeyInputMasking();
 
     // 生成 API 密钥按钮监听
     const generateApiKeyBtn = document.getElementById('generateApiKey');
@@ -305,6 +460,11 @@ function handlePasswordToggle(event) {
     if (!button) return;
     
     const targetId = button.getAttribute('data-target');
+    if (targetId === API_KEY_INPUT_ID) {
+        toggleApiKeyDisplayMode();
+        return;
+    }
+
     const input = document.getElementById(targetId);
     const icon = button.querySelector('i');
     
@@ -446,11 +606,43 @@ function handleProviderPoolsConfigChange(event) {
  * @param {HTMLElement} button - 按钮元素
  */
 function handleProviderPasswordToggle(button) {
-    const targetKey = button.getAttribute('data-target');
-    const input = button.parentNode.querySelector(`input[data-config-key="${targetKey}"]`);
+    const targetKey = (button.getAttribute('data-target') || '').trim();
+    const wrapper = button.closest('.password-input-wrapper');
+    const input = (targetKey
+        ? wrapper?.querySelector(`input[data-config-key="${targetKey}"]`)
+        : null) || wrapper?.querySelector('input[data-config-key], input');
     const icon = button.querySelector('i');
     
     if (!input || !icon) return;
+
+    if (input.dataset.sensitive === 'true') {
+        const currentMode = input.dataset.displayMode || PROVIDER_SECRET_DISPLAY_MODE_MASKED;
+        const isEditing = input.dataset.isEditing === 'true';
+
+        if (currentMode === PROVIDER_SECRET_DISPLAY_MODE_FULL) {
+            input.dataset.realValue = input.value || '';
+            input.type = 'text';
+            input.readOnly = true;
+            input.value = maskSensitiveValue(input.dataset.realValue || '');
+            input.dataset.displayMode = PROVIDER_SECRET_DISPLAY_MODE_MASKED;
+            icon.className = 'fas fa-eye';
+            return;
+        }
+
+        const realValue = String(input.dataset.realValue ?? input.dataset.configValue ?? '');
+        input.type = 'text';
+        input.readOnly = !isEditing;
+        input.value = realValue;
+        input.dataset.displayMode = PROVIDER_SECRET_DISPLAY_MODE_FULL;
+        icon.className = 'fas fa-eye-slash';
+
+        if (isEditing) {
+            input.focus();
+            const length = input.value.length;
+            input.setSelectionRange(length, length);
+        }
+        return;
+    }
     
     if (input.type === 'password') {
         input.type = 'text';
@@ -508,7 +700,14 @@ async function handleRestart() {
  */
 async function handleReloadConfig() {
     // 确认重载操作
-    if (!confirm(t('header.reload.confirm'))) {
+    const confirmed = await showConfirmModal({
+        title: t('header.reload'),
+        message: t('header.reload.confirm'),
+        confirmText: t('header.reload'),
+        confirmButtonClass: 'btn-primary',
+        iconClass: 'fas fa-sync-alt'
+    });
+    if (!confirmed) {
         return;
     }
     
@@ -530,7 +729,14 @@ async function handleReloadConfig() {
  */
 async function handleRestartService() {
     // 确认重启操作
-    if (!confirm(t('header.restart.confirm'))) {
+    const confirmed = await showConfirmModal({
+        title: t('header.restart'),
+        message: t('header.restart.confirm'),
+        confirmText: t('header.restart'),
+        confirmButtonClass: 'btn-danger',
+        iconClass: 'fas fa-redo'
+    });
+    if (!confirmed) {
         return;
     }
     
@@ -577,6 +783,8 @@ export {
     handleProviderChange,
     handleGeminiCredsTypeChange,
     handleKiroCredsTypeChange,
+    getApiKeyActualValue,
+    setApiKeyDisplayValue,
     handlePasswordToggle,
     handleProviderPoolsConfigChange,
     handleProviderPasswordToggle

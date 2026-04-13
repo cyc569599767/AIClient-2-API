@@ -1,6 +1,6 @@
 // 配置管理功能模块
 
-import { showToast } from './utils.js';
+import { showToast, showConfirmModal } from './utils.js';
 import { t } from './i18n.js';
 
 let allConfigs = []; // 存储所有配置数据
@@ -1140,7 +1140,14 @@ async function batchLinkProviderConfigs() {
         .join(', ');
     
     const confirmMsg = t('upload.batchLink.confirm', { count: unlinkedConfigs.length, summary: providerSummary });
-    if (!confirm(confirmMsg)) {
+    const confirmed = await showConfirmModal({
+        title: t('upload.batchLink'),
+        message: confirmMsg,
+        confirmText: t('common.confirm'),
+        confirmButtonClass: 'btn-primary',
+        iconClass: 'fas fa-link'
+    });
+    if (!confirmed) {
         return;
     }
     
@@ -1199,7 +1206,14 @@ async function deleteUnboundConfigs() {
     
     // 显示确认对话框
     const confirmMsg = t('upload.deleteUnbound.confirm', { count: unboundConfigs.length });
-    if (!confirm(confirmMsg)) {
+    const confirmed = await showConfirmModal({
+        title: t('upload.deleteUnbound'),
+        message: confirmMsg,
+        confirmText: t('upload.deleteUnbound'),
+        confirmButtonClass: 'btn-danger',
+        iconClass: 'fas fa-trash-alt'
+    });
+    if (!confirmed) {
         return;
     }
     

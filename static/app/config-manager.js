@@ -1,7 +1,13 @@
 // 配置管理模块
 
 import { showToast, formatUptime } from './utils.js';
-import { handleProviderChange, handleGeminiCredsTypeChange, handleKiroCredsTypeChange } from './event-handlers.js';
+import {
+    handleProviderChange,
+    handleGeminiCredsTypeChange,
+    handleKiroCredsTypeChange,
+    getApiKeyActualValue,
+    setApiKeyDisplayValue
+} from './event-handlers.js';
 import { loadProviders } from './provider-manager.js';
 import { t } from './i18n.js';
 
@@ -217,7 +223,7 @@ async function loadConfiguration() {
         const modelProviderEl = document.getElementById('modelProvider');
         const systemPromptEl = document.getElementById('systemPrompt');
 
-        if (apiKeyEl) apiKeyEl.value = data.REQUIRED_API_KEY || '';
+        if (apiKeyEl) setApiKeyDisplayValue(data.REQUIRED_API_KEY || '');
         if (hostEl) hostEl.value = data.HOST || '127.0.0.1';
         if (portEl) portEl.value = data.SERVER_PORT || 3000;
         
@@ -448,7 +454,7 @@ async function saveConfiguration() {
     }
 
     const config = {
-        REQUIRED_API_KEY: document.getElementById('apiKey')?.value || '',
+        REQUIRED_API_KEY: getApiKeyActualValue(),
         HOST: document.getElementById('host')?.value || '127.0.0.1',
         SERVER_PORT: parseInt(document.getElementById('port')?.value || 3000),
         MODEL_PROVIDER: selectedProviders.length > 0 ? selectedProviders.join(',') : 'gemini-cli-oauth',
@@ -619,7 +625,7 @@ function generateApiKey() {
     window.crypto.getRandomValues(array);
     const randomKey = 'sk-' + Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
     
-    apiKeyEl.value = randomKey;
+    setApiKeyDisplayValue(randomKey, { preserveMode: true });
     
     showToast(t('common.success'), t('config.apiKey.generated') || '已生成新的 API 密钥', 'success');
     
