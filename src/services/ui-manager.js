@@ -217,6 +217,22 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
         return await providerApi.handleRefreshProviderUuid(req, res, currentConfig, providerPoolManager, providerType, providerUuid);
     }
 
+    // Create provider group (default without creating provider node)
+    // NOTE: This must be before the generic /{providerType}/{uuid} route to avoid matching 'group' as UUID
+    const createProviderGroupMatch = pathParam.match(/^\/api\/providers\/([^\/]+)\/group$/);
+    if (method === 'POST' && createProviderGroupMatch) {
+        const providerType = decodeURIComponent(createProviderGroupMatch[1]);
+        return await providerApi.handleCreateProviderGroup(req, res, currentConfig, providerPoolManager, providerType);
+    }
+
+    // Delete entire provider group
+    // NOTE: This must be before the generic /{providerType}/{uuid} route to avoid matching 'group' as UUID
+    const deleteProviderGroupMatch = pathParam.match(/^\/api\/providers\/([^\/]+)\/group$/);
+    if (method === 'DELETE' && deleteProviderGroupMatch) {
+        const providerType = decodeURIComponent(deleteProviderGroupMatch[1]);
+        return await providerApi.handleDeleteProviderGroup(req, res, currentConfig, providerPoolManager, providerType);
+    }
+
     // Update specific provider configuration
     // NOTE: This generic route must be after all specific routes like /reset-health, /health-check, /delete-unhealthy
     const updateProviderMatch = pathParam.match(/^\/api\/providers\/([^\/]+)\/([^\/]+)$/);

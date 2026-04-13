@@ -11,10 +11,11 @@ jest.mock('../src/providers/adapter.js', () => ({
 }));
 
 let handleHealthCheck;
+let handleSingleProviderHealthCheck;
 let ProviderPoolManager;
 
 beforeAll(async () => {
-    ({ handleHealthCheck } = await import('../src/ui-modules/provider-api.js'));
+    ({ handleHealthCheck, handleSingleProviderHealthCheck } = await import('../src/ui-modules/provider-api.js'));
     ({ ProviderPoolManager } = await import('../src/providers/provider-pool-manager.js'));
 });
 
@@ -46,7 +47,7 @@ afterEach(() => {
 });
 
 describe('provider health check behavior', () => {
-    test('batch health check returns skippedCount and does not count health-check success as usage', async () => {
+    test('batch health check ignores checkHealth=false and still runs manual checks', async () => {
         const providerType = 'openai-custom';
         const providerStatus = [
             {
@@ -120,22 +121,27 @@ describe('provider health check behavior', () => {
         const payload = JSON.parse(res.body);
         expect(res.statusCode).toBe(200);
         expect(payload.success).toBe(true);
-        expect(payload.successCount).toBe(1);
-        expect(payload.failCount).toBe(0);
-        expect(payload.skippedCount).toBe(2);
+        expect(payload.successCount).toBe(2);
+        expect(payload.failCount).toBe(1);
+        expect(payload.skippedCount).toBe(0);
         expect(payload.results).toHaveLength(3);
 
-        expect(mockProviderPoolManager._checkProviderHealth).toHaveBeenCalledTimes(1);
-        expect(mockProviderPoolManager.markProviderHealthy).toHaveBeenCalledTimes(1);
+        expect(mockProviderPoolManager._checkProviderHealth).toHaveBeenCalledTimes(2);
+        expect(mockProviderPoolManager.markProviderHealthy).toHaveBeenCalledTimes(2);
         expect(mockProviderPoolManager.markProviderHealthy.mock.calls[0][4]).toBe(false);
+        expect(mockProviderPoolManager.markProviderUnhealthyImmediately).toHaveBeenCalledTimes(1);
 
         const disabledResult = payload.results.find(item => item.uuid === 'disabled-node');
-        expect(disabledResult.success).toBeNull();
+        expect(disabledResult.success).toBe(false);
+        expect(disabledResult.healthy).toBe(false);
         expect(disabledResult.reason).toBe('disabled');
+        expect(disabledResult.isWarning).toBe(true);
 
         const skippedResult = payload.results.find(item => item.uuid === 'skipped-node');
-        expect(skippedResult.success).toBeNull();
-        expect(skippedResult.reason).toBe('checkHealthDisabled');
+        expect(skippedResult.success).toBe(true);
+        expect(skippedResult.healthy).toBe(true);
+        expect(skippedResult.reason).toBeUndefined();
+        expect(skippedResult.isWarning).toBeUndefined();
 
         const checkedNode = providerStatus.find(item => item.config.uuid === 'checked-node');
         expect(checkedNode.config.usageCount).toBe(4);
@@ -173,6 +179,68 @@ describe('provider health check behavior', () => {
         expect(payload.failCount).toBe(0);
         expect(payload.skippedCount).toBe(0);
         expect(payload.results).toEqual([]);
+    });
+
+    test('single health check still runs when checkHealth=false', async () => {
+        const providerType = 'openai-custom';
+        const providerUuid = 'single-warning-node';
+        const providerStatus = [
+            {
+                config: {
+                    uuid: providerUuid,
+                    isHealthy: false,
+                    isDisabled: false,
+                    checkHealth: false,
+                    usageCount: 1,
+                    errorCount: 1
+                }
+            }
+        ];
+
+        const mockProviderPoolManager = {
+            providerStatus: {
+                [providerType]: providerStatus
+            },
+            _checkProviderHealth: jest.fn(async () => ({
+                success: true,
+                modelName: 'gpt-4o-mini'
+            })),
+            markProviderHealthy: jest.fn((type, providerConfig, resetUsageCount = false, healthCheckModel = null, countAsUsage = true) => {
+                const target = providerStatus.find(item => item.config.uuid === providerConfig.uuid);
+                if (!target) return;
+                target.config.isHealthy = true;
+                target.config.errorCount = 0;
+                if (healthCheckModel) {
+                    target.config.lastHealthCheckModel = healthCheckModel;
+                }
+            }),
+            markProviderUnhealthyImmediately: jest.fn((type, providerConfig, message) => {
+                const target = providerStatus.find(item => item.config.uuid === providerConfig.uuid);
+                if (!target) return;
+                target.config.isHealthy = false;
+                target.config.lastErrorMessage = message;
+            })
+        };
+
+        const res = createMockRes();
+        await handleSingleProviderHealthCheck(
+            {},
+            res,
+            { PROVIDER_POOLS_FILE_PATH: tempFilePath },
+            mockProviderPoolManager,
+            providerType,
+            providerUuid
+        );
+
+        const payload = JSON.parse(res.body);
+        expect(res.statusCode).toBe(200);
+        expect(payload.success).toBe(true);
+        expect(payload.healthy).toBe(true);
+        expect(payload.isWarning).toBe(false);
+        expect(payload.reason).toBeNull();
+        expect(mockProviderPoolManager._checkProviderHealth).toHaveBeenCalledTimes(1);
+        expect(mockProviderPoolManager.markProviderHealthy).toHaveBeenCalledTimes(1);
+        expect(mockProviderPoolManager.markProviderUnhealthyImmediately).toHaveBeenCalledTimes(0);
     });
 
     test('markProviderHealthy supports countAsUsage=false', () => {

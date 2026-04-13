@@ -954,6 +954,29 @@ export class ProviderPoolManager {
     }
 
     /**
+     * Returns child provider group types for a base type.
+     * Example: openai-custom -> [openai-custom-prod, openai-custom-dev]
+     * @private
+     * @param {string} providerType
+     * @returns {string[]}
+     */
+    _getChildProviderTypes(providerType) {
+        if (!providerType || typeof providerType !== 'string') {
+            return [];
+        }
+
+        const prefix = `${providerType}-`;
+        return Object.keys(this.providerStatus || {})
+            .filter(type =>
+                type !== providerType &&
+                type.startsWith(prefix) &&
+                Array.isArray(this.providerStatus[type]) &&
+                this.providerStatus[type].length > 0
+            )
+            .sort((a, b) => a.localeCompare(b));
+    }
+
+    /**
      * 获取一个可用的提供商插槽，支持 Fallback 机制
      */
     async acquireSlotWithFallback(providerType, requestedModel = null, options = {}) {
@@ -964,10 +987,19 @@ export class ProviderPoolManager {
 
         const triedTypes = new Set();
         const typesToTry = [providerType];
-        
-        const fallbackTypes = this.fallbackChain[providerType] || [];
-        if (Array.isArray(fallbackTypes)) {
-            typesToTry.push(...fallbackTypes);
+
+        // Always try child groups first (same provider family)
+        const childTypes = this._getChildProviderTypes(providerType);
+        if (childTypes.length > 0) {
+            typesToTry.push(...childTypes);
+        }
+
+        // Optional fallback chain (can be disabled by caller)
+        if (options.disableConfiguredFallback !== true) {
+            const fallbackTypes = this.fallbackChain[providerType] || [];
+            if (Array.isArray(fallbackTypes)) {
+                typesToTry.push(...fallbackTypes);
+            }
         }
 
         for (const currentType of typesToTry) {
@@ -992,7 +1024,11 @@ export class ProviderPoolManager {
                 const selectedConfig = await this.acquireSlot(currentType, requestedModel, options);
                 if (selectedConfig) {
                     if (currentType !== providerType) {
-                        this._log('info', `Fallback Slot activated (Chain): ${providerType} -> ${currentType} (uuid: ${selectedConfig.uuid})`);
+                        if (currentType.startsWith(`${providerType}-`)) {
+                            this._log('info', `Child group slot selected: ${providerType} -> ${currentType} (uuid: ${selectedConfig.uuid})`);
+                        } else {
+                            this._log('info', `Fallback Slot activated (Chain): ${providerType} -> ${currentType} (uuid: ${selectedConfig.uuid})`);
+                        }
                     }
                     return {
                         config: selectedConfig,
@@ -1096,10 +1132,19 @@ export class ProviderPoolManager {
         // 记录尝试过的类型，避免循环
         const triedTypes = new Set();
         const typesToTry = [providerType];
-        
-        const fallbackTypes = this.fallbackChain[providerType] || [];
-        if (Array.isArray(fallbackTypes)) {
-            typesToTry.push(...fallbackTypes);
+
+        // Always try child groups first (same provider family)
+        const childTypes = this._getChildProviderTypes(providerType);
+        if (childTypes.length > 0) {
+            typesToTry.push(...childTypes);
+        }
+
+        // Optional fallback chain (can be disabled by caller)
+        if (options.disableConfiguredFallback !== true) {
+            const fallbackTypes = this.fallbackChain[providerType] || [];
+            if (Array.isArray(fallbackTypes)) {
+                typesToTry.push(...fallbackTypes);
+            }
         }
 
         for (const currentType of typesToTry) {
@@ -1139,7 +1184,11 @@ export class ProviderPoolManager {
             
             if (selectedConfig) {
                 if (currentType !== providerType) {
-                    this._log('info', `Fallback activated (Chain): ${providerType} -> ${currentType} (uuid: ${selectedConfig.uuid})`);
+                    if (currentType.startsWith(`${providerType}-`)) {
+                        this._log('info', `Child group selected: ${providerType} -> ${currentType} (uuid: ${selectedConfig.uuid})`);
+                    } else {
+                        this._log('info', `Fallback activated (Chain): ${providerType} -> ${currentType} (uuid: ${selectedConfig.uuid})`);
+                    }
                 }
                 return {
                     config: selectedConfig,

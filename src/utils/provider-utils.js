@@ -336,7 +336,7 @@ export function createProviderConfig(options) {
         [credPathKey]: credPath,
         uuid: generateUUID(),
         checkModelName: defaultCheckModel,
-        checkHealth: defaultCheckHealth ?? false,
+        checkHealth: defaultCheckHealth ?? true,
         isHealthy: true,
         isDisabled: false,
         lastUsed: null,
