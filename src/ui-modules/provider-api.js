@@ -13,7 +13,6 @@ import { generateUUID, createProviderConfig, formatSystemPath, detectProviderFro
 import { broadcastEvent } from './event-broadcast.js';
 import { getRegisteredProviders, getServiceAdapter, serviceInstances } from '../providers/adapter.js';
 import { getCurrentProviderRouting } from '../services/service-manager.js';
-import { findDuplicateApiKey } from '../utils/provider-api-key-validator.js';
 
 const MANUAL_DELETE_ONLY_GROUP_BASE_TYPES = ['claude-custom', 'openai-custom', 'openaiResponses-custom'];
 
@@ -552,26 +551,6 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager) 
             filteredConfig.modelMapping = normalizeModelMapping(filteredConfig.modelMapping);
             filteredConfig.notSupportedModels = [];
         }
-
-        const apiKeyConflict = findDuplicateApiKey(
-            providerPools,
-            providerType,
-            filteredConfig.uuid || providerConfig.uuid || '',
-            filteredConfig
-        );
-        if (apiKeyConflict) {
-            const conflictProvider = apiKeyConflict.existingProviderUuid
-                ? `${apiKeyConflict.existingProviderType} (${apiKeyConflict.existingProviderUuid})`
-                : apiKeyConflict.existingProviderType;
-            res.writeHead(409, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: {
-                    message: `Duplicate API key is not allowed across providers. Conflicts with ${conflictProvider}.`
-                }
-            }));
-            return true;
-        }
-
         providerPools[providerType].push(filteredConfig);
 
         // Save to file
@@ -682,20 +661,6 @@ async function _handleUpdateProvider(req, res, currentConfig, providerPoolManage
             errorCount: existingProvider.errorCount,
             lastErrorTime: existingProvider.lastErrorTime
         };
-
-        const apiKeyConflict = findDuplicateApiKey(providerPools, providerType, providerUuid, updatedProvider);
-        if (apiKeyConflict) {
-            const conflictProvider = apiKeyConflict.existingProviderUuid
-                ? `${apiKeyConflict.existingProviderType} (${apiKeyConflict.existingProviderUuid})`
-                : apiKeyConflict.existingProviderType;
-            res.writeHead(409, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: {
-                    message: `Duplicate API key is not allowed across providers. Conflicts with ${conflictProvider}.`
-                }
-            }));
-            return true;
-        }
 
         providerPools[providerType][providerIndex] = updatedProvider;
 
@@ -1109,7 +1074,7 @@ export async function handleResetProviderHealth(req, res, currentConfig, provide
 }
 
 /**
- * 删除特定提供商类型的所有不健康节点
+ * 一键禁用当前分组下的所有提供商（不影响子分组）
  */
 export async function handleDisableAllProviders(req, res, currentConfig, providerPoolManager, providerType) {
     return withFileLock(() => _handleDisableAllProviders(req, res, currentConfig, providerPoolManager, providerType)).catch(err => {
@@ -1123,7 +1088,8 @@ async function _handleDisableAllProviders(req, res, currentConfig, providerPoolM
     try {
         const filePath = currentConfig.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
         let providerPools = {};
-
+        
+        // Load existing pools
         if (existsSync(filePath)) {
             try {
                 const fileContent = readFileSync(filePath, 'utf-8');
@@ -1142,113 +1108,28 @@ async function _handleDisableAllProviders(req, res, currentConfig, providerPoolM
         }
 
         const providers = Array.isArray(providerPools[providerType]) ? providerPools[providerType] : [];
-        if (providers.length === 0) {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                success: true,
-                message: 'No providers to disable',
-                disabledCount: 0,
-                totalCount: 0
-            }));
-            return true;
-        }
-
         const disabledProviders = [];
-        providers.forEach(provider => {
-            if (!provider.isDisabled) {
+        let disabledCount = 0;
+
+        for (const provider of providers) {
+            if (!provider || typeof provider !== 'object') {
+                continue;
+            }
+            if (provider.isDisabled !== true) {
                 provider.isDisabled = true;
-                disabledProviders.push({
-                    uuid: provider.uuid,
-                    customName: provider.customName
-                });
+                disabledCount++;
+            } else {
+                provider.isDisabled = true;
             }
-        });
-
-        writeFileSync(filePath, JSON.stringify(providerPools, null, 2), 'utf-8');
-        logger.info(`[UI API] Disabled ${disabledProviders.length}/${providers.length} providers in group ${providerType}`);
-
-        if (providerPoolManager) {
-            providerPoolManager.providerPools = providerPools;
-            providerPoolManager.initializeProviderStatus();
-        }
-
-        broadcastEvent('config_update', {
-            action: 'disable_all',
-            filePath: filePath,
-            providerType,
-            disabledCount: disabledProviders.length,
-            totalCount: providers.length,
-            disabledProviders: disabledProviders.map(provider => sanitizeProviderData(provider)),
-            timestamp: new Date().toISOString()
-        });
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-            success: true,
-            message: `Successfully disabled ${disabledProviders.length} providers`,
-            disabledCount: disabledProviders.length,
-            totalCount: providers.length,
-            disabledProviders
-        }));
-        return true;
-    } catch (error) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: error.message } }));
-        return true;
-    }
-}
-
-export async function handleDeleteUnhealthyProviders(req, res, currentConfig, providerPoolManager, providerType) {
-    try {
-        const filePath = currentConfig.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
-        let providerPools = {};
-        
-        // Load existing pools
-        if (existsSync(filePath)) {
-            try {
-                const fileContent = readFileSync(filePath, 'utf-8');
-                providerPools = JSON.parse(fileContent);
-            } catch (readError) {
-                res.writeHead(404, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: { message: 'Provider pools file not found' } }));
-                return true;
-            }
-        }
-
-        // Find and remove unhealthy providers
-        const providers = providerPools[providerType] || [];
-        
-        if (providers.length === 0) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: { message: 'No providers found for this type' } }));
-            return true;
-        }
-
-        // Filter out unhealthy providers (keep only healthy ones)
-        const unhealthyProviders = providers.filter(p => !p.isHealthy);
-        const healthyProviders = providers.filter(p => p.isHealthy);
-        
-        if (unhealthyProviders.length === 0) {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                success: true,
-                message: 'No unhealthy providers to delete',
-                deletedCount: 0,
-                remainingCount: providers.length
-            }));
-            return true;
-        }
-
-        // Update the provider pool with only healthy providers
-        if (healthyProviders.length === 0) {
-            delete providerPools[providerType];
-        } else {
-            providerPools[providerType] = healthyProviders;
+            disabledProviders.push({
+                uuid: provider.uuid,
+                customName: provider.customName
+            });
         }
 
         // Save to file
         writeFileSync(filePath, JSON.stringify(providerPools, null, 2), 'utf-8');
-        logger.info(`[UI API] Deleted ${unhealthyProviders.length} unhealthy providers from ${providerType}`);
+        logger.info(`[UI API] Disabled ${disabledCount} providers in group ${providerType}`);
 
         // Update provider pool manager if available
         if (providerPoolManager) {
@@ -1258,21 +1139,21 @@ export async function handleDeleteUnhealthyProviders(req, res, currentConfig, pr
 
         // 广播更新事件
         broadcastEvent('config_update', {
-            action: 'delete_unhealthy',
+            action: 'disable_all',
             filePath: filePath,
             providerType,
-            deletedCount: unhealthyProviders.length,
-            deletedProviders: unhealthyProviders.map(p => sanitizeProviderData({ uuid: p.uuid, customName: p.customName })),
+            disabledCount,
+            disabledProviders: disabledProviders.map(provider => sanitizeProviderData(provider)),
             timestamp: new Date().toISOString()
         });
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             success: true,
-            message: `Successfully deleted ${unhealthyProviders.length} unhealthy providers`,
-            deletedCount: unhealthyProviders.length,
-            remainingCount: healthyProviders.length,
-            deletedProviders: unhealthyProviders.map(p => ({ uuid: p.uuid, customName: p.customName }))
+            message: `Successfully disabled ${disabledCount} providers in group`,
+            disabledCount,
+            totalCount: providers.length,
+            disabledProviders
         }));
         return true;
     } catch (error) {

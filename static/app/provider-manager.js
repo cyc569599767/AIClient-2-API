@@ -460,11 +460,6 @@ function renderProviders(providers, supportedProviders = [], currentRouting = {}
                             <span class="provider-inline-stat-value">${errorCount}</span>
                         </span>
                     </div>
-                    ${!isSubGroup ? `
-                    <div class="provider-current-route-inline">
-                        <span class="provider-current-route-inline-label" data-i18n="providers.currentRoute.label">${t('providers.currentRoute.label')}</span>
-                        <span class="provider-current-route-inline-value">${currentRouteTextEscaped}</span>
-                    </div>` : ''}
                 </div>
                 <div class="provider-header-right">
                     ${!isSubGroup ? `

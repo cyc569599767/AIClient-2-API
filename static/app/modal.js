@@ -869,8 +869,8 @@ function showProviderManagerModal(data) {
                         <button class="btn btn-secondary" onclick="window.refreshUnhealthyUuids('${providerType}')" data-i18n="modal.provider.refreshUnhealthyUuids" title="刷新不健康节点的UUID">
                             <i class="fas fa-sync-alt"></i> <span data-i18n="modal.provider.refreshUnhealthyUuidsBtn">刷新UUID</span>
                         </button>
-                        <button class="btn btn-warning" onclick="window.disableAllProvidersInGroup('${providerType}')" data-i18n="modal.provider.disableAll" title="一键禁用当前分组">
-                            <i class="fas fa-ban"></i> <span data-i18n="modal.provider.disableAllBtn">一键禁用</span>
+                        <button class="btn btn-danger" onclick="window.disableAllProvidersInGroup('${providerType}')" data-i18n="modal.provider.disableAllGroup" title="禁用分组">
+                            <i class="fas fa-ban"></i> <span data-i18n="modal.provider.disableAllGroupBtn">禁用分组</span>
                         </button>
                     </div>
                 </div>
@@ -2590,54 +2590,59 @@ async function refreshProviderUuid(uuid, event) {
 }
 
 /**
- * 一键禁用当前分组下所有提供商（仅作用于当前分组，不影响子分组）
+ * 一键禁用当前分组下的所有提供商节点
  * @param {string} providerType - 提供商类型
  */
 async function disableAllProvidersInGroup(providerType) {
-    const enabledCount = currentProviders.filter(p => !p.isDisabled).length;
-
-    if (enabledCount === 0) {
-        showToast(t('common.info'), t('modal.provider.disableAll.noProviders'), 'info');
+    const totalCount = currentProviders.length;
+    if (totalCount === 0) {
+        showToast(t('common.info'), t('modal.provider.disableAllGroup.noProviders'), 'info');
         return;
     }
 
+    const activeCount = currentProviders.filter(provider => !provider.isDisabled).length;
+    if (activeCount === 0) {
+        showToast(t('common.info'), t('modal.provider.disableAllGroup.noProviders'), 'info');
+        return;
+    }
+    
     const confirmed = await showConfirmModal({
-        title: t('modal.provider.disableAll'),
-        message: t('modal.provider.disableAllConfirm', { type: providerType, count: enabledCount }),
-        confirmText: t('modal.provider.disableAll'),
-        confirmButtonClass: 'btn-warning',
+        title: t('modal.provider.disableAllGroup'),
+        message: t('modal.provider.disableAllGroupConfirm', { type: providerType, count: activeCount }),
+        confirmText: t('modal.provider.disableAllGroup'),
+        confirmButtonClass: 'btn-danger',
         iconClass: 'fas fa-ban'
     });
     if (!confirmed) {
         return;
     }
-
+    
     try {
-        showToast(t('common.info'), t('modal.provider.disableAll.disabling'), 'info');
-
+        showToast(t('common.info'), t('modal.provider.disableAllGroup.disabling'), 'info');
+        
         const response = await window.apiClient.post(
             `/providers/${encodeURIComponent(providerType)}/disable-all`,
             {}
         );
-
+        
         if (response.success) {
             showToast(
                 t('common.success'),
-                t('modal.provider.disableAll.success', { count: response.disabledCount }),
+                t('modal.provider.disableAllGroup.success', { count: response.disabledCount }),
                 'success'
             );
-
+            
             // 重新加载配置
             await window.apiClient.post('/reload-config');
-
+            
             // 刷新提供商配置显示
             await refreshProviderConfig(providerType);
         } else {
-            showToast(t('common.error'), t('modal.provider.disableAll.failed'), 'error');
+            showToast(t('common.error'), t('modal.provider.disableAllGroup.failed'), 'error');
         }
     } catch (error) {
-        console.error('一键禁用分组失败:', error);
-        showToast(t('common.error'), t('modal.provider.disableAll.failed') + ': ' + error.message, 'error');
+        console.error('一键禁用当前分组失败:', error);
+        showToast(t('common.error'), t('modal.provider.disableAllGroup.failed') + ': ' + error.message, 'error');
     }
 }
 

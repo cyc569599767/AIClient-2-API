@@ -184,15 +184,7 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
         return await providerApi.handleSingleProviderHealthCheck(req, res, currentConfig, providerPoolManager, providerType, providerUuid);
     }
 
-    // Delete all unhealthy providers for a specific type
-    // NOTE: This must be before the generic /{providerType}/{uuid} route to avoid matching 'delete-unhealthy' as UUID
-    const deleteUnhealthyMatch = pathParam.match(/^\/api\/providers\/([^\/]+)\/delete-unhealthy$/);
-    if (method === 'DELETE' && deleteUnhealthyMatch) {
-        const providerType = decodeURIComponent(deleteUnhealthyMatch[1]);
-        return await providerApi.handleDeleteUnhealthyProviders(req, res, currentConfig, providerPoolManager, providerType);
-    }
-
-    // Disable all providers for a specific group (current group only, no child groups)
+    // Disable all providers in current group
     // NOTE: This must be before the generic /{providerType}/{uuid} route to avoid matching 'disable-all' as UUID
     const disableAllMatch = pathParam.match(/^\/api\/providers\/([^\/]+)\/disable-all$/);
     if (method === 'POST' && disableAllMatch) {
@@ -242,7 +234,7 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
     }
 
     // Update specific provider configuration
-    // NOTE: This generic route must be after all specific routes like /reset-health, /health-check, /delete-unhealthy
+    // NOTE: This generic route must be after all specific routes like /reset-health, /health-check, /disable-all
     const updateProviderMatch = pathParam.match(/^\/api\/providers\/([^\/]+)\/([^\/]+)$/);
     if (method === 'PUT' && updateProviderMatch) {
         const providerType = decodeURIComponent(updateProviderMatch[1]);
